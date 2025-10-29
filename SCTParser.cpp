@@ -337,8 +337,7 @@ namespace SCTParser {
         image.data = &data_ptr;
 
 
-
-        astcenc_swizzle swizzle = { ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A };
+        astcenc_swizzle swizzle = { ASTCENC_SWZ_B, ASTCENC_SWZ_G, ASTCENC_SWZ_R, ASTCENC_SWZ_A };
 
 
         status = astcenc_decompress_image(
