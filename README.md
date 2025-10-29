@@ -5,7 +5,7 @@ ASSet Ripper is a tool for extracting encrypted pack assets from yuna engine, or
 
 ```bash
 git clone https://github.com/akioukun/Chaos-Zero-Nightmare-ASSet-Ripper.git
-cd ChaosZeroNightmareRipper
+cd Chaos-Zero-Nightmare-ASSet-Ripper
 mkdir build && cd build
 cmake ..
 cmake --build . --config Release
