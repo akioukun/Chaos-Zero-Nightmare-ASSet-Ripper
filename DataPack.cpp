@@ -1,4 +1,5 @@
 #include "DataPack.h"
+#include "SCTParser.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -60,7 +61,6 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode& node) {
 
     const auto& info = std::get<Core::FileInfo>(node.data);
 
-
     uint64_t file_end = static_cast<uint64_t>(info.offset) + static_cast<uint64_t>(info.size);
     if (static_cast<uint64_t>(info.offset) >= static_cast<uint64_t>(file_size_) ||
         file_end > static_cast<uint64_t>(file_size_)) {
@@ -91,7 +91,6 @@ void DataPack::Scan(std::atomic<float>& progress) {
     try {
         if (type_ == PackType::Encrypted) ScanEncrypted(progress);
         else if (type_ == PackType::Decrypted) ScanDecrypted(progress);
-
 
         std::function<void(Core::FileNode&)> process_node = [&](Core::FileNode& node) {
             try {
@@ -124,11 +123,9 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
     uint8_t header_buffer[15];
 
     while (cursor < file_size_) {
-
         if ((cursor & 0xFFFF) == 0) {
             progress = (float)cursor / file_size_;
         }
-
 
         if (cursor + 1 > file_size_) break;
 
@@ -147,7 +144,6 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
             uint8_t path_len = header_buffer[5];
             uint32_t data_len = *(uint32_t*)&header_buffer[6];
 
-
             if (container_len > file_size_ || path_len == 0 || path_len > 1024 || data_len > file_size_) {
                 cursor++;
                 continue;
@@ -165,7 +161,6 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
                 std::string path_str((char*)path_buffer.data(), path_len);
 
                 uint32_t file_offset = header_offset + 15 + path_len;
-
 
                 if (file_offset + data_len <= file_size_) {
                     AddFileToTree(path_str, file_offset, data_len);
@@ -204,7 +199,6 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
         uint8_t path_len = mapped_data_[header_offset + 5];
         uint32_t data_len = *(uint32_t*)&mapped_data_[header_offset + 6];
 
-
         if (container_len > file_size_ || path_len == 0 || path_len > 1024 || data_len > file_size_) {
             cursor++;
             continue;
@@ -218,7 +212,6 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
 
             std::string path_str((char*)&mapped_data_[header_offset + 15], path_len);
             uint32_t file_offset = header_offset + 15 + path_len;
-
 
             if (file_offset + data_len <= file_size_) {
                 AddFileToTree(path_str, file_offset, data_len);
@@ -271,11 +264,13 @@ void DataPack::AddFileToTree(const std::string& path, uint32_t offset, uint32_t 
         std::cerr << "Error adding file to tree: " << path << " - " << e.what() << std::endl;
     }
 }
-void DataPack::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress) {
-    Extract(root_node_, output_path, progress);
+
+void DataPack::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png) {
+    Extract(root_node_, output_path, progress, convert_sct_to_png);
 }
 
-void DataPack::Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress) {
+void DataPack::Extract(const Core::FileNode& node, const std::wstring& output_path,
+    std::atomic<float>& progress, bool convert_sct_to_png) {
     uint64_t total_size_to_extract = 0;
     std::function<void(const Core::FileNode&)> F =
         [&](const Core::FileNode& n) {
@@ -287,26 +282,53 @@ void DataPack::Extract(const Core::FileNode& node, const std::wstring& output_pa
         }
         };
     F(node);
-    if (total_size_to_extract == 0){
+    if (total_size_to_extract == 0) {
         progress = 1.0f;
-        return;}
+        return;
+    }
     std::atomic<uint64_t> extracted_size = 0;
-    ExtractNode(node, output_path, extracted_size, total_size_to_extract, progress);
+    ExtractNode(node, output_path, extracted_size, total_size_to_extract, progress, convert_sct_to_png);
     progress = 1.0f;
 }
+
 void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& current_path,
     std::atomic<uint64_t>& extracted_size, const uint64_t total_size,
-    std::atomic<float>& progress) {
+    std::atomic<float>& progress, bool convert_sct_to_png) {
     try {
         if (std::holds_alternative<Core::FileInfo>(node.data)) {
             const auto& info = std::get<Core::FileInfo>(node.data);
             std::filesystem::path final_path = std::filesystem::path(current_path) / node.name;
+
+
+            std::string ext_lower = info.format;
+            std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
+            bool is_sct = (ext_lower == ".sct" || ext_lower == ".sct2");
+
+            if (is_sct && convert_sct_to_png) {
+
+                final_path.replace_extension(".png");
+            }
 
             std::filesystem::create_directories(final_path.parent_path());
 
             std::vector<uint8_t> buffer = GetFileData(node);
 
             if (!buffer.empty()) {
+
+                if (is_sct && convert_sct_to_png) {
+                    try {
+                        std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(buffer, false);
+                        if (!png_data.empty()) {
+                            buffer = std::move(png_data);
+                        }
+
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << "SCT conversion failed for " << node.name << ": " << e.what() << std::endl;
+
+                    }
+                }
+
                 std::ofstream out(final_path, std::ios::binary);
                 if (out.is_open()) {
                     out.write((const char*)buffer.data(), buffer.size());
@@ -330,7 +352,7 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
             }
 
             for (const auto& child : info.children) {
-                ExtractNode(child, new_path, extracted_size, total_size, progress);
+                ExtractNode(child, new_path, extracted_size, total_size, progress, convert_sct_to_png);
             }
         }
     }

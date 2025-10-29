@@ -30,7 +30,7 @@
 #include "portable-file-dialogs.h"
 #include "DataPack.h"
 #include "Core.h"
-
+#include "SCTParser.h"
 
 #define INITIAL_WINDOW_WIDTH 1400
 #define INITIAL_WINDOW_HEIGHT 900
@@ -63,6 +63,19 @@ static bool show_atlas_window = false;
 static char atlas_filter[256] = { 0 };
 static std::vector<char> atlas_text_buf;
 
+static SDL_Window* image_window = nullptr;
+static SDL_Renderer* image_renderer = nullptr;
+static SDL_Texture* image_window_texture = nullptr;
+static int image_window_width = 0;
+static int image_window_height = 0;
+static std::string image_window_title = "";
+
+static bool show_context_menu = false;
+static const Core::FileNode* context_menu_node = nullptr;
+static struct nk_vec2 context_menu_pos = { 0, 0 };
+static bool show_export_options_window = false;
+static bool export_sct_as_png = true;
+static bool export_convert_all_sct = false;
 
 static std::string wstring_to_utf8(const std::wstring& w) {
     if (w.empty()) return {};
@@ -80,6 +93,12 @@ static Uint32 last_click_time = 0;
 static const Core::FileNode* last_clicked_node = nullptr;
 static int click_count = 0;
 
+
+static bool show_sct_preview_window = false;
+static GLuint sct_preview_texture = 0;
+static int sct_preview_width = 0;
+static int sct_preview_height = 0;
+static std::string sct_preview_filename = "";
 
 int get_file_count(const Core::FileNode& node) {
     try {
@@ -122,13 +141,14 @@ std::string format_size(uint64_t bytes) {
     return buffer;
 }
 
-bool matches_search(const Core::FileNode& node, const std::string& query){
+bool matches_search(const Core::FileNode& node, const std::string& query) {
     if (query.empty()) return true;
     std::string name_lower = node.name;
     std::string query_lower = query;
     std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
     std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
-    return name_lower.find(query_lower) != std::string::npos;}
+    return name_lower.find(query_lower) != std::string::npos;
+}
 
 bool has_matching_child(const Core::FileNode& node, const std::string& query) {
     if (query.empty()) return true;
@@ -142,11 +162,17 @@ bool has_matching_child(const Core::FileNode& node, const std::string& query) {
     return false;
 }
 
+bool is_sct_format(const std::string& ext) {
+    std::string ext_lower = ext;
+    std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
+    return ext_lower == ".sct" || ext_lower == ".sct2";
+}
+
 bool is_previewable_format(const std::string& ext) {
     std::string ext_lower = ext;
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
     return ext_lower == ".png" || ext_lower == ".jpg" || ext_lower == ".jpeg" ||
-        ext_lower == ".bmp" || ext_lower == ".tga";
+        ext_lower == ".bmp" || ext_lower == ".tga" || is_sct_format(ext_lower);
 }
 
 bool is_atlas_file(const std::string& ext) {
@@ -160,7 +186,8 @@ std::string get_file_icon(const std::string& ext) {
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
 
     if (ext_lower == ".png" || ext_lower == ".jpg" || ext_lower == ".jpeg" ||
-        ext_lower == ".bmp" || ext_lower == ".tga") {
+        ext_lower == ".bmp" || ext_lower == ".tga" ||
+        ext_lower == ".sct" || ext_lower == ".sct2") {
         return ICON_IMAGE;
     }
     else if (ext_lower == ".atlas") {
@@ -191,7 +218,6 @@ void load_atlas_preview(const Core::FileNode& node) {
     }
 }
 
-
 void load_image_preview(const Core::FileNode& node) {
     if (preview_texture) {
         glDeleteTextures(1, &preview_texture);
@@ -202,6 +228,7 @@ void load_image_preview(const Core::FileNode& node) {
     preview_height = 0;
     preview_error = "";
     preview_atlas_data = "";
+
     try {
         if (!std::holds_alternative<Core::FileInfo>(node.data)) {
             preview_error = "Not a file";
@@ -214,7 +241,7 @@ void load_image_preview(const Core::FileNode& node) {
             return;
         }
 
-	if (!is_previewable_format(info.format)) {
+        if (!is_previewable_format(info.format)) {
             preview_error = "Preview not available for " + info.format + " files";
             return;
         }
@@ -230,7 +257,36 @@ void load_image_preview(const Core::FileNode& node) {
 
         SDL_Surface* rgba_surface = nullptr;
 
-        {
+        if (is_sct_format(ext_lower)) {
+            try {
+                std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data, false);
+
+                if (png_data.empty()) {
+                    preview_error = "Failed to convert SCT/SCT2 file";
+                    return;
+                }
+
+                SDL_RWops* rw = SDL_RWFromMem(png_data.data(), (int)png_data.size());
+                if (!rw) {
+                    preview_error = "Failed to create memory stream for SCT";
+                    return;
+                }
+
+                SDL_Surface* surface = IMG_Load_RW(rw, 1);
+                if (!surface) {
+                    preview_error = "Failed to decode converted SCT image: " + std::string(IMG_GetError());
+                    return;
+                }
+
+                rgba_surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ABGR8888, 0);
+                SDL_FreeSurface(surface);
+            }
+            catch (const std::exception& e) {
+                preview_error = "SCT parsing error: " + std::string(e.what());
+                return;
+            }
+        }
+        else {
             SDL_RWops* rw = SDL_RWFromMem(file_data.data(), (int)file_data.size());
             if (!rw) {
                 preview_error = "Failed to create memory stream";
@@ -246,6 +302,7 @@ void load_image_preview(const Core::FileNode& node) {
             rgba_surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ABGR8888, 0);
             SDL_FreeSurface(surface);
         }
+
         if (!rgba_surface) {
             preview_error = "Failed to convert image format";
             return;
@@ -273,7 +330,269 @@ void load_image_preview(const Core::FileNode& node) {
     }
 }
 
-void handle_node_click(const Core::FileNode* node, bool is_folder){
+void open_sct_preview_window(const Core::FileNode& node) {
+    try {
+
+        if (image_window) {
+            if (image_window_texture) {
+                SDL_DestroyTexture(image_window_texture);
+                image_window_texture = nullptr;
+            }
+            if (image_renderer) {
+                SDL_DestroyRenderer(image_renderer);
+                image_renderer = nullptr;
+            }
+            SDL_DestroyWindow(image_window);
+            image_window = nullptr;
+        }
+
+
+        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data, false);
+
+        if (png_data.empty()) {
+            status_text = "Failed to convert SCT for preview window";
+            return;
+        }
+
+        SDL_RWops* rw = SDL_RWFromMem(png_data.data(), (int)png_data.size());
+        SDL_Surface* surface = IMG_Load_RW(rw, 1);
+        if (!surface) {
+            status_text = "Failed to load image for preview window";
+            return;
+        }
+
+        image_window_width = surface->w;
+        image_window_height = surface->h;
+        image_window_title = node.name;
+
+
+        image_window = SDL_CreateWindow(
+            image_window_title.c_str(),
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            image_window_width,
+            image_window_height,
+            SDL_WINDOW_SHOWN
+        );
+
+        if (!image_window) {
+            SDL_FreeSurface(surface);
+            status_text = "Failed to create preview window";
+            return;
+        }
+
+
+        image_renderer = SDL_CreateRenderer(image_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!image_renderer) {
+            SDL_FreeSurface(surface);
+            SDL_DestroyWindow(image_window);
+            image_window = nullptr;
+            status_text = "Failed to create renderer";
+            return;
+        }
+
+
+        image_window_texture = SDL_CreateTextureFromSurface(image_renderer, surface);
+        SDL_FreeSurface(surface);
+
+        if (!image_window_texture) {
+            SDL_DestroyRenderer(image_renderer);
+            image_renderer = nullptr;
+            SDL_DestroyWindow(image_window);
+            image_window = nullptr;
+            status_text = "Failed to create texture";
+            return;
+        }
+
+        status_text = "Image window opened: " + node.name;
+
+    }
+    catch (const std::exception& e) {
+        status_text = "Error opening image window: " + std::string(e.what());
+    }
+}
+void open_image_preview_window(const Core::FileNode& node) {
+    try {
+
+        if (image_window) {
+            if (image_window_texture) {
+                SDL_DestroyTexture(image_window_texture);
+                image_window_texture = nullptr;
+            }
+            if (image_renderer) {
+                SDL_DestroyRenderer(image_renderer);
+                image_renderer = nullptr;
+            }
+            SDL_DestroyWindow(image_window);
+            image_window = nullptr;
+        }
+
+
+        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        const auto& info = std::get<Core::FileInfo>(node.data);
+
+        SDL_Surface* surface = nullptr;
+
+        if (is_sct_format(info.format)) {
+            std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data, false);
+            if (png_data.empty()) {
+                status_text = "Failed to convert SCT for preview window";
+                return;
+            }
+            SDL_RWops* rw = SDL_RWFromMem(png_data.data(), (int)png_data.size());
+            surface = IMG_Load_RW(rw, 1);
+        }
+        else {
+            SDL_RWops* rw = SDL_RWFromMem(file_data.data(), (int)file_data.size());
+            surface = IMG_Load_RW(rw, 1);
+        }
+
+        if (!surface) {
+            status_text = "Failed to load image for preview window";
+            return;
+        }
+
+        int original_width = surface->w;
+        int original_height = surface->h;
+
+
+        SDL_DisplayMode display_mode;
+        SDL_GetCurrentDisplayMode(0, &display_mode);
+        int screen_width = display_mode.w;
+        int screen_height = display_mode.h;
+
+
+        int max_width = (int)(screen_width * 0.9f);
+        int max_height = (int)(screen_height * 0.9f);
+
+        image_window_width = original_width;
+        image_window_height = original_height;
+
+
+        if (image_window_width > max_width || image_window_height > max_height) {
+            float scale_w = (float)max_width / original_width;
+            float scale_h = (float)max_height / original_height;
+            float scale = (scale_w < scale_h) ? scale_w : scale_h;
+
+            image_window_width = (int)(original_width * scale);
+            image_window_height = (int)(original_height * scale);
+        }
+
+        image_window_title = node.name + " (" + std::to_string(original_width) + "x" + std::to_string(original_height) + ")";
+
+
+        image_window = SDL_CreateWindow(
+            image_window_title.c_str(),
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            image_window_width,
+            image_window_height,
+            SDL_WINDOW_SHOWN
+        );
+
+        if (!image_window) {
+            SDL_FreeSurface(surface);
+            status_text = "Failed to create preview window";
+            return;
+        }
+
+
+        image_renderer = SDL_CreateRenderer(image_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!image_renderer) {
+            SDL_FreeSurface(surface);
+            SDL_DestroyWindow(image_window);
+            image_window = nullptr;
+            status_text = "Failed to create renderer";
+            return;
+        }
+
+
+        image_window_texture = SDL_CreateTextureFromSurface(image_renderer, surface);
+        SDL_FreeSurface(surface);
+
+        if (!image_window_texture) {
+            SDL_DestroyRenderer(image_renderer);
+            image_renderer = nullptr;
+            SDL_DestroyWindow(image_window);
+            image_window = nullptr;
+            status_text = "Failed to create texture";
+            return;
+        }
+
+        status_text = "Image window opened: " + node.name;
+
+    }
+    catch (const std::exception& e) {
+        status_text = "Error opening image window: " + std::string(e.what());
+    }
+}
+void render_image_window() {
+    if (!image_window || !image_renderer || !image_window_texture) return;
+
+    SDL_RenderClear(image_renderer);
+    SDL_RenderCopy(image_renderer, image_window_texture, nullptr, nullptr);
+    SDL_RenderPresent(image_renderer);
+}
+
+void export_file_as_png(const Core::FileNode& node) {
+    try {
+        const auto& info = std::get<Core::FileInfo>(node.data);
+
+        std::string default_name = node.name;
+        size_t dot_pos = default_name.find_last_of('.');
+        if (dot_pos != std::string::npos) {
+            default_name = default_name.substr(0, dot_pos);
+        }
+        default_name += ".png";
+
+        auto f = pfd::save_file("Export as PNG", default_name,
+            { "PNG Files", "*.png", "All Files", "*.*" });
+
+        if (!f.result().empty()) {
+            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> png_data;
+
+            if (is_sct_format(info.format)) {
+                png_data = SCTParser::ConvertToPNG(file_data, false);
+            }
+            else {
+                png_data = file_data;
+            }
+
+            if (!png_data.empty()) {
+                std::ofstream out(f.result(), std::ios::binary);
+                out.write((const char*)png_data.data(), png_data.size());
+                out.close();
+                status_text = "Exported to: " + f.result();
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        status_text = "Export error: " + std::string(e.what());
+    }
+}
+
+
+void export_file_as_sct(const Core::FileNode& node) {
+    try {
+        auto f = pfd::save_file("Export as SCT", node.name,
+            { "SCT Files", "*.sct;*.sct2", "All Files", "*.*" });
+
+        if (!f.result().empty()) {
+            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::ofstream out(f.result(), std::ios::binary);
+            out.write((const char*)file_data.data(), file_data.size());
+            out.close();
+            status_text = "Exported to: " + f.result();
+        }
+    }
+    catch (const std::exception& e) {
+        status_text = "Export error: " + std::string(e.what());
+    }
+}
+
+void handle_node_click(const Core::FileNode* node, bool is_folder) {
     Uint32 current_time = SDL_GetTicks();
     Uint32 time_diff = current_time - last_click_time;
 
@@ -291,7 +610,6 @@ void handle_node_click(const Core::FileNode* node, bool is_folder){
         }
     }
     else {
-
         if (selected_node != node) selected_node = node;
         has_preview = false;
         preview_error = "";
@@ -300,6 +618,13 @@ void handle_node_click(const Core::FileNode* node, bool is_folder){
 
     last_click_time = current_time;
     last_clicked_node = node;
+}
+
+void handle_node_right_click(const Core::FileNode* node, struct nk_vec2 pos)
+{
+    context_menu_node = node;
+    context_menu_pos = pos;
+    show_context_menu = true;
 }
 
 void export_file_tree_json(const Core::FileNode& node, std::ofstream& out, int depth = 0) {
@@ -332,7 +657,7 @@ void export_file_tree_json(const Core::FileNode& node, std::ofstream& out, int d
     out << indent << "}";
 }
 
-void export_to_json(){
+void export_to_json() {
     try {
         auto f = pfd::save_file("Export File Map", "filemap.json",
             { "JSON Files", "*.json", "All Files", "*.*" });
@@ -352,7 +677,6 @@ void export_to_json(){
         status_text = "Export error: " + std::string(e.what());
     }
 }
-
 
 void draw_file_node(nk_context* ctx, const Core::FileNode& node, int depth = 0) {
     try {
@@ -417,7 +741,6 @@ void draw_file_node(nk_context* ctx, const Core::FileNode& node, int depth = 0) 
             if (is_expanded) {
                 for (const auto& child : folder.children)
                     draw_file_node(ctx, child, depth + 1);
-                
             }
         }
         else {
@@ -449,14 +772,26 @@ void draw_file_node(nk_context* ctx, const Core::FileNode& node, int depth = 0) 
             button_style.rounding = 3.0f;
 
             std::string file_label = node.name;
-            if (nk_button_label_styled(ctx, &button_style, file_label.c_str()))
+
+
+            if (nk_button_label_styled(ctx, &button_style, file_label.c_str())) {
                 handle_node_click(&node, false);
+            }
+
+
+            if (nk_input_is_mouse_hovering_rect(&ctx->input, nk_widget_bounds(ctx))) {
+                if (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_RIGHT)) {
+                    handle_node_right_click(&node, ctx->input.mouse.pos);
+                }
+            }
+
             nk_layout_row_push(ctx, 200.0f);
             std::string size_str = format_size(file_info.size) + " | " + file_info.format;
             nk_label_colored(ctx, size_str.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
 
             nk_layout_row_end(ctx);
-        }}
+        }
+    }
     catch (const std::exception& e) {
         std::cerr << "Error drawing node: " << e.what() << std::endl;
     }
@@ -473,7 +808,7 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window* win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1",
+    SDL_Window* win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.1",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -493,10 +828,35 @@ int main(int argc, char* argv[]) {
         SDL_Event evt;
         nk_input_begin(ctx);
         while (SDL_PollEvent(&evt)) {
-            if (evt.type == SDL_QUIT) running = false;
+            if (evt.type == SDL_QUIT) {
+                running = false;
+            }
+            else if (evt.type == SDL_WINDOWEVENT) {
+                if (evt.window.event == SDL_WINDOWEVENT_CLOSE) {
+                    Uint32 windowID = evt.window.windowID;
+                    if (windowID == SDL_GetWindowID(win)) {
+                        running = false;
+                    }
+                    else if (image_window && windowID == SDL_GetWindowID(image_window)) {
+
+                        if (image_window_texture) {
+                            SDL_DestroyTexture(image_window_texture);
+                            image_window_texture = nullptr;
+                        }
+                        if (image_renderer) {
+                            SDL_DestroyRenderer(image_renderer);
+                            image_renderer = nullptr;
+                        }
+                        SDL_DestroyWindow(image_window);
+                        image_window = nullptr;
+                    }
+                }
+
+            }
             nk_sdl_handle_event(&evt);
         }
         nk_input_end(ctx);
+
         if (is_task_running && task_future.valid() &&
             task_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             is_task_running = false;
@@ -519,17 +879,161 @@ int main(int argc, char* argv[]) {
         }
         int window_width, window_height;
         SDL_GetWindowSize(win, &window_width, &window_height);
+
+
+        if (show_context_menu && context_menu_node) {
+            if (nk_begin(ctx, "Context Menu",
+                nk_rect(context_menu_pos.x, context_menu_pos.y, 180.0f, 150.0f),
+                NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR)) {
+
+                if (std::holds_alternative<Core::FileInfo>(context_menu_node->data)) {
+                    const auto& info = std::get<Core::FileInfo>(context_menu_node->data);
+
+                    nk_layout_row_dynamic(ctx, 25, 1);
+
+                    if (is_sct_format(info.format)) {
+                        if (nk_button_label(ctx, "Export as PNG")) {
+                            export_file_as_png(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                        if (nk_button_label(ctx, "Export as SCT")) {
+                            export_file_as_sct(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                        if (nk_button_label(ctx, "Open Preview Window")) {
+                            open_image_preview_window(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                    }
+                    else if (is_previewable_format(info.format)) {
+                        if (nk_button_label(ctx, "Export as PNG")) {
+                            export_file_as_png(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                        if (nk_button_label(ctx, "Open Preview Window")) {
+                            open_image_preview_window(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                    }
+
+                    if (nk_button_label(ctx, "Extract Raw")) {
+
+                        try {
+                            auto f = pfd::save_file("Extract File", context_menu_node->name, { "All Files", "*.*" });
+                            if (!f.result().empty()) {
+                                std::vector<uint8_t> file_data = data_pack->GetFileData(*context_menu_node);
+                                std::ofstream out(f.result(), std::ios::binary);
+                                out.write((const char*)file_data.data(), file_data.size());
+                                out.close();
+                                status_text = "Extracted to: " + f.result();
+                            }
+                        }
+                        catch (...) {}
+                        show_context_menu = false;
+                    }
+                }
+
+                if (nk_button_label(ctx, "Close")) {
+                    show_context_menu = false;
+                }
+            }
+            else {
+                show_context_menu = false;
+            }
+            nk_end(ctx);
+        }
+        if (show_export_options_window) {
+            if (nk_begin(ctx, "Export Options", nk_rect(window_width / 2 - 200, window_height / 2 - 100, 400, 250),
+                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE)) {
+
+                nk_layout_row_dynamic(ctx, 25, 1);
+                nk_label(ctx, "Configure extraction options:", NK_TEXT_LEFT);
+
+                nk_layout_row_dynamic(ctx, 30, 1);
+                nk_checkbox_label(ctx, "Convert SCT files to PNG", (nk_bool*)&export_sct_as_png);
+
+                nk_layout_row_dynamic(ctx, 20, 1);
+                nk_label(ctx, "When enabled, .sct/.sct2 files will be", NK_TEXT_LEFT);
+                nk_label(ctx, "automatically converted to PNG during extraction.", NK_TEXT_LEFT);
+
+                nk_layout_row_dynamic(ctx, 25, 1);
+                std::string status = export_sct_as_png ? "Status: SCT conversion ENABLED" : "Status: SCT conversion DISABLED";
+                nk_label_colored(ctx, status.c_str(), NK_TEXT_LEFT,
+                    export_sct_as_png ? nk_rgb(100, 255, 100) : nk_rgb(255, 150, 150));
+
+                nk_layout_row_dynamic(ctx, 30, 2);
+                if (nk_button_label(ctx, "OK")) {
+                    show_export_options_window = false;
+                    status_text = export_sct_as_png ? "SCT to PNG conversion enabled" : "SCT to PNG conversion disabled";
+                }
+                if (nk_button_label(ctx, "Cancel")) {
+                    show_export_options_window = false;
+                }
+            }
+            else {
+                show_export_options_window = false;
+            }
+            nk_end(ctx);
+        }
+
+        if (show_sct_preview_window && sct_preview_texture) {
+            if (nk_begin(ctx, "SCT Preview", nk_rect(50, 50, window_width - 100, window_height - 100),
+                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) {
+
+                nk_layout_row_dynamic(ctx, 30, 1);
+                std::string title_text = sct_preview_filename + " - " +
+                    std::to_string(sct_preview_width) + "x" + std::to_string(sct_preview_height);
+                nk_label(ctx, title_text.c_str(), NK_TEXT_CENTERED);
+
+                nk_layout_row_dynamic(ctx, 30, 2);
+                if (nk_button_label(ctx, "Save as PNG")) {
+
+                    if (context_menu_node) {
+                        export_file_as_png(*context_menu_node);
+                    }
+                }
+                if (nk_button_label(ctx, "Close")) {
+                    show_sct_preview_window = false;
+                }
+
+                float panel_width = window_width - 120.0f;
+                float panel_height = window_height - 200.0f;
+                float scale_w = panel_width / sct_preview_width;
+                float scale_h = panel_height / sct_preview_height;
+                float scale = (scale_w < scale_h) ? scale_w : scale_h;
+                if (scale > 1.0f) scale = 1.0f;
+
+                float img_w = sct_preview_width * scale;
+                float img_h = sct_preview_height * scale;
+
+                nk_layout_row_static(ctx, img_h, (int)img_w, 1);
+                struct nk_image img = nk_image_id((int)sct_preview_texture);
+                nk_image(ctx, img);
+
+            }
+            else {
+                show_sct_preview_window = false;
+                if (sct_preview_texture) {
+                    glDeleteTextures(1, &sct_preview_texture);
+                    sct_preview_texture = 0;
+                }
+            }
+            nk_end(ctx);
+        }
+
         if (show_credits_window) {
             if (nk_begin(ctx, "Credits", nk_rect(window_width / 2 - 200, window_height / 2 - 150, 400, 300),
                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
                 NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) {
 
                 nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1", NK_TEXT_CENTERED);
+                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.1", NK_TEXT_CENTERED);
 
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "", NK_TEXT_LEFT);
                 nk_label(ctx, "made with nuklear, sdl2/opengl, portable-file-dialogs", NK_TEXT_LEFT);
+                nk_label(ctx, "SCT/SCT2 support with astcenc & etcdec", NK_TEXT_LEFT);
+                nk_label(ctx, "big thanks to formagGinoo for SCTParser", NK_TEXT_LEFT);
                 nk_label(ctx, "by @akioukun (github.com/akioukun)", NK_TEXT_LEFT);
 
                 nk_layout_row_dynamic(ctx, 30, 1);
@@ -542,7 +1046,6 @@ int main(int argc, char* argv[]) {
             }
             nk_end(ctx);
         }
-
 
         if (show_export_success) {
             if (nk_begin(ctx, "Success", nk_rect(window_width / 2 - 150, window_height / 2 - 50, 300, 100),
@@ -560,22 +1063,18 @@ int main(int argc, char* argv[]) {
             }
             nk_end(ctx);
         }
-
         if (nk_begin(ctx, "Main", nk_rect(0, 0, (float)window_width, (float)window_height), NK_WINDOW_NO_SCROLLBAR)) {
             bool pack_loaded = (data_pack != nullptr);
             bool tree_scanned = pack_loaded && !std::get<Core::FolderInfo>(data_pack->GetFileTree().data).children.empty();
             bool selection_exists = (selected_node != nullptr);
 
-
-            nk_layout_row_dynamic(ctx, 38, 6);
+            nk_layout_row_dynamic(ctx, 38, 7);
 
             struct nk_style_button btn_style = ctx->style.button;
             btn_style.rounding = 4.0f;
             btn_style.padding = nk_vec2(10, 8);
-
             btn_style.normal = nk_style_item_color(nk_rgb(70, 70, 75));
             btn_style.hover = nk_style_item_color(nk_rgb(90, 90, 95));
-
 
             bool pack_already_loaded = (data_pack != nullptr);
             bool can_open_pack = !is_task_running && !pack_already_loaded;
@@ -627,11 +1126,9 @@ int main(int argc, char* argv[]) {
                     status_text = "Scanning...";
                     task_progress = 0.0f;
 
-
                     expanded_folders.clear();
                     selected_node = nullptr;
                     last_clicked_node = nullptr;
-
                     has_preview = false;
                     preview_error = "";
                     preview_atlas_data = "";
@@ -665,11 +1162,12 @@ int main(int argc, char* argv[]) {
                         std::string dest_str = d.result();
                         std::wstring dest_path(dest_str.begin(), dest_str.end());
                         is_task_running = true;
-                        status_text = "Extracting...";
+                        status_text = "Extracting all files...";
                         task_progress = 0.0f;
-                        task_future = std::async(std::launch::async, [dest_path]() {
+                        bool convert_sct = export_sct_as_png;
+                        task_future = std::async(std::launch::async, [dest_path, convert_sct]() {
                             try {
-                                data_pack->ExtractAll(dest_path, task_progress);
+                                data_pack->Extract(data_pack->GetFileTree(), dest_path, task_progress, convert_sct);
                             }
                             catch (...) {}
                             });
@@ -685,9 +1183,9 @@ int main(int argc, char* argv[]) {
                 nk_widget_disable_end(ctx);
             }
 
-
             if (tree_scanned && selection_exists && !is_task_running &&
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected")) {
+
                 try {
                     auto d = pfd::select_folder("Select destination folder", ".");
                     if (!d.result().empty()) {
@@ -697,9 +1195,10 @@ int main(int argc, char* argv[]) {
                         status_text = "Extracting...";
                         task_progress = 0.0f;
                         const Core::FileNode* node_to_extract = selected_node;
-                        task_future = std::async(std::launch::async, [dest_path, node_to_extract]() {
+                        bool convert_sct = export_sct_as_png;
+                        task_future = std::async(std::launch::async, [dest_path, node_to_extract, convert_sct]() {
                             try {
-                                data_pack->Extract(*node_to_extract, dest_path, task_progress);
+                                data_pack->Extract(*node_to_extract, dest_path, task_progress, convert_sct);
                             }
                             catch (...) {}
                             });
@@ -715,7 +1214,6 @@ int main(int argc, char* argv[]) {
                 nk_widget_disable_end(ctx);
             }
 
-
             if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Export JSON")) {
                 export_to_json();
             }
@@ -725,6 +1223,14 @@ int main(int argc, char* argv[]) {
                 nk_widget_disable_end(ctx);
             }
 
+            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Options")) {
+                show_export_options_window = true;
+            }
+            else if (!tree_scanned || is_task_running) {
+                nk_widget_disable_begin(ctx);
+                nk_button_label_styled(ctx, &btn_style, "Options");
+                nk_widget_disable_end(ctx);
+            }
 
             if (nk_button_label_styled(ctx, &btn_style, "Credits")) {
                 show_credits_window = true;
@@ -772,8 +1278,25 @@ int main(int argc, char* argv[]) {
                             "x" + std::to_string(preview_height);
                         nk_label(ctx, preview_title.c_str(), NK_TEXT_CENTERED);
 
+
+                        if (selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data)) {
+                            const auto& info = std::get<Core::FileInfo>(selected_node->data);
+                            if (is_sct_format(info.format)) {
+                                nk_layout_row_dynamic(ctx, 30, 3);
+                                if (nk_button_label(ctx, "Open Window")) {
+                                    open_image_preview_window(*selected_node);
+                                }
+                                if (nk_button_label(ctx, "Export PNG")) {
+                                    export_file_as_png(*selected_node);
+                                }
+                                if (nk_button_label(ctx, "Export SCT")) {
+                                    export_file_as_sct(*selected_node);
+                                }
+                            }
+                        }
+
                         float panel_width = right_width - 20;
-                        float panel_height = content_height - 60;
+                        float panel_height = content_height - 100;
                         float scale_w = panel_width / preview_width;
                         float scale_h = panel_height / preview_height;
                         float scale = (scale_w < scale_h) ? scale_w : scale_h;
@@ -789,7 +1312,6 @@ int main(int argc, char* argv[]) {
                     else if (!preview_atlas_data.empty()) {
                         nk_layout_row_dynamic(ctx, 25, 1);
                         nk_label(ctx, "Atlas File Content:", NK_TEXT_CENTERED);
-
 
                         nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
                         nk_layout_row_push(ctx, 120);
@@ -808,7 +1330,6 @@ int main(int argc, char* argv[]) {
                             catch (...) {}
                         }
                         nk_layout_row_end(ctx);
-
 
                         if (atlas_text_buf.empty()) { atlas_text_buf.push_back('\0'); }
                         nk_layout_row_dynamic(ctx, content_height - 80, 1);
@@ -895,13 +1416,24 @@ int main(int argc, char* argv[]) {
         glClear(GL_COLOR_BUFFER_BIT);
         glClearColor(0.12f, 0.12f, 0.14f, 1.0f);
         nk_sdl_render(NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
+        render_image_window();
         SDL_GL_SwapWindow(win);
     }
 
     if (preview_texture) glDeleteTextures(1, &preview_texture);
+    if (sct_preview_texture) glDeleteTextures(1, &sct_preview_texture);
     nk_sdl_shutdown();
     SDL_GL_DeleteContext(glContext);
     SDL_DestroyWindow(win);
+    if (image_window) {
+        if (image_window_texture) {
+            SDL_DestroyTexture(image_window_texture);
+        }
+        if (image_renderer) {
+            SDL_DestroyRenderer(image_renderer);
+        }
+        SDL_DestroyWindow(image_window);
+    }
     IMG_Quit();
     SDL_Quit();
     return 0;
