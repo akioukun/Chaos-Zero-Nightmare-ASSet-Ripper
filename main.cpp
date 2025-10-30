@@ -1033,7 +1033,8 @@ int main(int argc, char* argv[]) {
                 nk_label(ctx, "", NK_TEXT_LEFT);
                 nk_label(ctx, "made with nuklear, sdl2/opengl, portable-file-dialogs", NK_TEXT_LEFT);
                 nk_label(ctx, "SCT/SCT2 support with astcenc & etcdec", NK_TEXT_LEFT);
-                nk_label(ctx, "big thanks to formagGinoo for SCTParser", NK_TEXT_LEFT);
+                nk_label(ctx, "big thanks to @formagGino (github.com/formagGinoo) for SCTParser and DBParser", NK_TEXT_LEFT);
+                nk_label(ctx, "thanks to @LukeFZ (github.com/LukeFZ) for DB decryption logic", NK_TEXT_LEFT);
                 nk_label(ctx, "by @akioukun (github.com/akioukun)", NK_TEXT_LEFT);
 
                 nk_layout_row_dynamic(ctx, 30, 1);
