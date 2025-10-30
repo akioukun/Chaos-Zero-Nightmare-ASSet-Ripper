@@ -862,7 +862,7 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window* win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.1",
+    SDL_Window* win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.2",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -1059,7 +1059,7 @@ int main(int argc, char* argv[]) {
                 NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) {
 
                 nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.1", NK_TEXT_CENTERED);
+                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.2", NK_TEXT_CENTERED);
 
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "", NK_TEXT_LEFT);
