@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <array>
 
 DataPack::DataPack(const std::wstring& path) : pack_path_(path), type_(PackType::Unknown) {
     root_node_.name = "root";
@@ -122,6 +123,13 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
     size_t cursor = 0;
     uint8_t header_buffer[15];
 
+    std::array<uint8_t, Core::KEY_SIZE> key;
+    uint32_t current = Core::INITIAL;
+    for (size_t i = 0; i < Core::KEY_SIZE; ++i) {
+        current = (current * Core::MULT) & 0x7FFFFFFF;
+        key[i] = (current >> 16) & 0xFF;
+    }
+
     while (cursor < file_size_) {
         if ((cursor & 0xFFFF) == 0) {
             progress = (float)cursor / file_size_;
@@ -129,7 +137,7 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
 
         if (cursor + 1 > file_size_) break;
 
-        if ((mapped_data_[cursor] ^ Core::KEY[cursor % Core::KEY.size()]) == 0x02) {
+        if ((mapped_data_[cursor] ^ key[cursor % Core::KEY_SIZE]) == 0x02) {
             size_t header_offset = cursor - 4;
 
             if (header_offset < 0 || header_offset + 15 > file_size_) {
