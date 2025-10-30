@@ -19,8 +19,8 @@ public:
     const Core::FileNode& GetFileTree() const { return root_node_; }
 
     void Scan(std::atomic<float>& progress);
-    void Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false);
-    void ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false);
+   void Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false, bool convert_db_to_json = false);
+    void ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false, bool convert_db_to_json = false);
     std::vector<uint8_t> GetFileData(const Core::FileNode& node);
 
     std::wstring pack_path_;
@@ -29,7 +29,7 @@ private:
     void ScanEncrypted(std::atomic<float>& progress);
     void ScanDecrypted(std::atomic<float>& progress);
     void AddFileToTree(const std::string& path, uint32_t offset, uint32_t size);
-    void ExtractNode(const Core::FileNode& node, const std::wstring& current_path, std::atomic<uint64_t>& extracted_size, const uint64_t total_size, std::atomic<float>& progress, bool convert_sct_to_png);
+    void ExtractNode(const Core::FileNode& node, const std::wstring& current_path, std::atomic<uint64_t>& extracted_size, const uint64_t total_size, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json);
 
     HANDLE hFile_ = INVALID_HANDLE_VALUE;
     HANDLE hMapFile_ = NULL;

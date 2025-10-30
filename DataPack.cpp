@@ -5,7 +5,8 @@
 #include <iostream>
 #include <algorithm>
 #include <array>
-
+#include "DBParser.h"
+#include "Logger.h"
 DataPack::DataPack(const std::wstring& path) : pack_path_(path), type_(PackType::Unknown) {
     root_node_.name = "root";
     root_node_.data = Core::FolderInfo{};
@@ -273,48 +274,58 @@ void DataPack::AddFileToTree(const std::string& path, uint32_t offset, uint32_t 
     }
 }
 
-void DataPack::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png) {
-    Extract(root_node_, output_path, progress, convert_sct_to_png);
+void DataPack::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json) {
+	LogInfo("ExtractAll started");
+	Extract(root_node_, output_path, progress, convert_sct_to_png, convert_db_to_json);
+	LogInfo("ExtractAll finished");
 }
 
 void DataPack::Extract(const Core::FileNode& node, const std::wstring& output_path,
-    std::atomic<float>& progress, bool convert_sct_to_png) {
-    uint64_t total_size_to_extract = 0;
-    std::function<void(const Core::FileNode&)> F =
-        [&](const Core::FileNode& n) {
-        if (std::holds_alternative<Core::FileInfo>(n.data)) {
-            total_size_to_extract += std::get<Core::FileInfo>(n.data).size;
-        }
-        else if (std::holds_alternative<Core::FolderInfo>(n.data)) {
-            for (const auto& child : std::get<Core::FolderInfo>(n.data).children) F(child);
-        }
-        };
-    F(node);
-    if (total_size_to_extract == 0) {
-        progress = 1.0f;
-        return;
-    }
-    std::atomic<uint64_t> extracted_size = 0;
-    ExtractNode(node, output_path, extracted_size, total_size_to_extract, progress, convert_sct_to_png);
-    progress = 1.0f;
+    std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json) {
+	uint64_t total_size_to_extract = 0;
+	std::function<void(const Core::FileNode&)> F =
+		[&](const Core::FileNode& n) {
+		if (std::holds_alternative<Core::FileInfo>(n.data)) {
+			total_size_to_extract += std::get<Core::FileInfo>(n.data).size;
+		}
+		else if (std::holds_alternative<Core::FolderInfo>(n.data)) {
+			for (const auto& child : std::get<Core::FolderInfo>(n.data).children) F(child);
+		}
+		};
+	F(node);
+	if (total_size_to_extract == 0) {
+		progress = 1.0f;
+		return;
+	}
+	std::atomic<uint64_t> extracted_size = 0;
+	LogInfo("Extract begin for node");
+	ExtractNode(node, output_path, extracted_size, total_size_to_extract, progress, convert_sct_to_png, convert_db_to_json);
+	progress = 1.0f;
+	LogInfo("Extract end for node");
 }
 
 void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& current_path,
     std::atomic<uint64_t>& extracted_size, const uint64_t total_size,
-    std::atomic<float>& progress, bool convert_sct_to_png) {
+    std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json) {
+
     try {
         if (std::holds_alternative<Core::FileInfo>(node.data)) {
             const auto& info = std::get<Core::FileInfo>(node.data);
             std::filesystem::path final_path = std::filesystem::path(current_path) / node.name;
-
+			LogInfo(std::string("Extracting file: ") + node.name + " size=" + std::to_string(info.size));
 
             std::string ext_lower = info.format;
             std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
             bool is_sct = (ext_lower == ".sct" || ext_lower == ".sct2");
+            bool is_db = (ext_lower == ".db");
+
 
             if (is_sct && convert_sct_to_png) {
-
                 final_path.replace_extension(".png");
+            }
+
+            if (is_db && convert_db_to_json) {
+                final_path.replace_extension(".json");
             }
 
             std::filesystem::create_directories(final_path.parent_path());
@@ -325,27 +336,56 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
 
                 if (is_sct && convert_sct_to_png) {
                     try {
+                        LogInfo(std::string("Converting SCT to PNG: ") + node.name);
                         std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(buffer, false);
                         if (!png_data.empty()) {
                             buffer = std::move(png_data);
                         }
-
-                    }
-                    catch (const std::exception& e) {
-                        std::cerr << "SCT conversion failed for " << node.name << ": " << e.what() << std::endl;
-
+                    } catch (const std::exception& e) {
+                        LogError(std::string("SCT conversion failed for ") + node.name + ": " + e.what());
                     }
                 }
 
-                std::ofstream out(final_path, std::ios::binary);
-                if (out.is_open()) {
-                    out.write((const char*)buffer.data(), buffer.size());
-                    out.close();
+                if (is_db && convert_db_to_json) {
+                    try {
+                        LogInfo(std::string("Converting DB to JSON: ") + node.name);
+                        std::ofstream out(final_path);
+                        if (out.is_open()) {
+                            bool ok = DBParser::ConvertToJsonToStream(buffer, out);
+                            out.close();
+                            if (!ok) {
+                                LogError(std::string("DB conversion returned false for ") + node.name);
+                                std::ofstream out2(final_path);
+                                out2 << "{}";
+                                out2.close();
+                            }
+                        } else {
+                            LogError(std::string("Failed to open output for DB JSON: ") + final_path.string());
+                        }
+                        buffer.clear();
+                    } catch (const std::exception& e) {
+                        LogError(std::string("DB conversion exception for ") + node.name + ": " + e.what());
+                    }
                 }
+
+                if (!buffer.empty()) {
+                    std::ofstream out(final_path, std::ios::binary);
+                    if (out.is_open()) {
+                        out.write((const char*)buffer.data(), buffer.size());
+                        out.close();
+                    } else {
+                        LogError(std::string("Failed to open output for raw write: ") + final_path.string());
+                    }
+                }
+            } else {
+                LogError(std::string("Empty buffer for file: ") + node.name);
             }
             extracted_size += info.size;
             if (total_size > 0) {
                 progress = (float)extracted_size / total_size;
+				if ((extracted_size & 0x7FFFFF) == 0) {
+					LogInfo(std::string("Progress: ") + std::to_string((int)(progress * 100)) + "%");
+				}
             }
         }
         else if (std::holds_alternative<Core::FolderInfo>(node.data)) {
@@ -360,11 +400,12 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
             }
 
             for (const auto& child : info.children) {
-                ExtractNode(child, new_path, extracted_size, total_size, progress, convert_sct_to_png);
+               ExtractNode(child, new_path, extracted_size, total_size, progress, convert_sct_to_png, convert_db_to_json);
             }
         }
     }
     catch (const std::exception& e) {
+        LogError(std::string("Error extracting node: ") + node.name + " - " + e.what());
         std::cerr << "Error extracting node: " << node.name << " - " << e.what() << std::endl;
     }
 }

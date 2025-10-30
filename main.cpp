@@ -31,6 +31,8 @@
 #include "DataPack.h"
 #include "Core.h"
 #include "SCTParser.h"
+#include "DBParser.h"
+#include "json.hpp"
 
 #define INITIAL_WINDOW_WIDTH 1400
 #define INITIAL_WINDOW_HEIGHT 900
@@ -41,6 +43,9 @@
 #define ICON_IMAGE ""
 #define ICON_COMPRESSED ""
 #define ICON_ATLAS ""
+#define ICON_DATABASE ""
+
+using json = nlohmann::json;
 
 static std::unique_ptr<DataPack> data_pack = nullptr;
 static Core::FileNode const* selected_node = nullptr;
@@ -63,6 +68,12 @@ static bool show_atlas_window = false;
 static char atlas_filter[256] = { 0 };
 static std::vector<char> atlas_text_buf;
 
+static json db_json_data;
+static std::vector<std::string> db_column_names;
+static std::vector<std::vector<std::string>> db_rows;
+
+static std::string db_filename = "";
+
 static SDL_Window* image_window = nullptr;
 static SDL_Renderer* image_renderer = nullptr;
 static SDL_Texture* image_window_texture = nullptr;
@@ -76,6 +87,7 @@ static struct nk_vec2 context_menu_pos = { 0, 0 };
 static bool show_export_options_window = false;
 static bool export_sct_as_png = true;
 static bool export_convert_all_sct = false;
+static bool export_db_as_json = true;
 
 static std::string wstring_to_utf8(const std::wstring& w) {
     if (w.empty()) return {};
@@ -92,7 +104,6 @@ static std::string export_success_msg = "";
 static Uint32 last_click_time = 0;
 static const Core::FileNode* last_clicked_node = nullptr;
 static int click_count = 0;
-
 
 static bool show_sct_preview_window = false;
 static GLuint sct_preview_texture = 0;
@@ -168,6 +179,12 @@ bool is_sct_format(const std::string& ext) {
     return ext_lower == ".sct" || ext_lower == ".sct2";
 }
 
+bool is_db_file(const std::string& ext) {
+    std::string ext_lower = ext;
+    std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
+    return ext_lower == ".db";
+}
+
 bool is_previewable_format(const std::string& ext) {
     std::string ext_lower = ext;
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
@@ -193,10 +210,99 @@ std::string get_file_icon(const std::string& ext) {
     else if (ext_lower == ".atlas") {
         return ICON_ATLAS;
     }
+    else if (ext_lower == ".db") {
+        return ICON_DATABASE;
+    }
     else if (ext_lower == ".srt" || ext_lower == ".zip" || ext_lower == ".pack") {
         return ICON_COMPRESSED;
     }
     return ICON_FILE;
+}
+
+void load_db_preview(const Core::FileNode& node) {
+    try {
+        db_column_names.clear();
+        db_rows.clear();
+        db_json_data.clear();
+        preview_atlas_data = "";
+        has_preview = false;
+
+        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        if (file_data.empty()) {
+            preview_error = "Failed to read DB file";
+            return;
+        }
+
+        std::string json_str = DBParser::ConvertToJson(file_data);
+        if (json_str.empty() || json_str == "{}") {
+            preview_error = "Failed to parse DB file";
+            return;
+        }
+
+
+        try {
+            db_json_data = json::parse(json_str);
+        } catch (const json::parse_error& e) {
+
+            preview_atlas_data = json_str;
+            if (json_str.length() > 50000) {
+                preview_atlas_data = json_str.substr(0, 50000) + "\n\n... (truncated)";
+            }
+            atlas_text_buf.assign(preview_atlas_data.begin(), preview_atlas_data.end());
+            atlas_text_buf.push_back('\0');
+
+            preview_error = "DB parsing error - showing raw JSON output";
+
+            db_column_names.clear();
+            db_rows.clear();
+            db_json_data.clear();
+            return;
+        }
+
+        db_filename = node.name;
+
+        if (!db_json_data.is_array() || db_json_data.empty()) {
+            preview_error = "DB file contains no data";
+            return;
+        }
+
+
+        if (db_json_data[0].is_object()) {
+            for (auto& el : db_json_data[0].items()) {
+                db_column_names.push_back(el.key());
+            }
+        }
+
+
+        for (auto& row : db_json_data) {
+            if (row.is_object()) {
+                std::vector<std::string> row_data;
+                for (const auto& col : db_column_names) {
+                    if (row.contains(col)) {
+                        if (row[col].is_null()) {
+                            row_data.push_back("");
+                        } else if (row[col].is_string()) {
+                            row_data.push_back(row[col].get<std::string>());
+                        } else {
+                            row_data.push_back(row[col].dump());
+                        }
+                    } else {
+                        row_data.push_back("");
+                    }
+                }
+                db_rows.push_back(row_data);
+            }
+        }
+
+        preview_error = "";
+        preview_atlas_data = "";
+    }
+    catch (const std::exception& e) {
+        preview_error = "DB parsing error: " + std::string(e.what());
+        db_column_names.clear();
+        db_rows.clear();
+        db_json_data.clear();
+    }
 }
 
 void load_atlas_preview(const Core::FileNode& node) {
@@ -228,6 +334,8 @@ void load_image_preview(const Core::FileNode& node) {
     preview_height = 0;
     preview_error = "";
     preview_atlas_data = "";
+    db_column_names.clear();
+    db_rows.clear();
 
     try {
         if (!std::holds_alternative<Core::FileInfo>(node.data)) {
@@ -235,6 +343,11 @@ void load_image_preview(const Core::FileNode& node) {
             return;
         }
         const auto& info = std::get<Core::FileInfo>(node.data);
+
+        if (is_db_file(info.format)) {
+            load_db_preview(node);
+            return;
+        }
 
         if (is_atlas_file(info.format)) {
             load_atlas_preview(node);
@@ -330,91 +443,39 @@ void load_image_preview(const Core::FileNode& node) {
     }
 }
 
-void open_sct_preview_window(const Core::FileNode& node) {
+void export_db_as_json_file(const Core::FileNode& node) {
     try {
+        std::string default_name = node.name;
+        size_t dot_pos = default_name.find_last_of('.');
+        if (dot_pos != std::string::npos) {
+            default_name = default_name.substr(0, dot_pos);
+        }
+        default_name += ".json";
 
-        if (image_window) {
-            if (image_window_texture) {
-                SDL_DestroyTexture(image_window_texture);
-                image_window_texture = nullptr;
+        auto f = pfd::save_file("Export DB as JSON", default_name,
+            { "JSON Files", "*.json", "All Files", "*.*" });
+
+        if (!f.result().empty()) {
+            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::string json_str = DBParser::ConvertToJson(file_data);
+
+            if (!json_str.empty() && json_str != "{}") {
+                std::ofstream out(f.result());
+                out << json_str;
+                out.close();
+                status_text = "Exported DB to JSON: " + f.result();
+            } else {
+                status_text = "Failed to convert DB to JSON";
             }
-            if (image_renderer) {
-                SDL_DestroyRenderer(image_renderer);
-                image_renderer = nullptr;
-            }
-            SDL_DestroyWindow(image_window);
-            image_window = nullptr;
         }
-
-
-        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
-        std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data, false);
-
-        if (png_data.empty()) {
-            status_text = "Failed to convert SCT for preview window";
-            return;
-        }
-
-        SDL_RWops* rw = SDL_RWFromMem(png_data.data(), (int)png_data.size());
-        SDL_Surface* surface = IMG_Load_RW(rw, 1);
-        if (!surface) {
-            status_text = "Failed to load image for preview window";
-            return;
-        }
-
-        image_window_width = surface->w;
-        image_window_height = surface->h;
-        image_window_title = node.name;
-
-
-        image_window = SDL_CreateWindow(
-            image_window_title.c_str(),
-            SDL_WINDOWPOS_CENTERED,
-            SDL_WINDOWPOS_CENTERED,
-            image_window_width,
-            image_window_height,
-            SDL_WINDOW_SHOWN
-        );
-
-        if (!image_window) {
-            SDL_FreeSurface(surface);
-            status_text = "Failed to create preview window";
-            return;
-        }
-
-
-        image_renderer = SDL_CreateRenderer(image_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!image_renderer) {
-            SDL_FreeSurface(surface);
-            SDL_DestroyWindow(image_window);
-            image_window = nullptr;
-            status_text = "Failed to create renderer";
-            return;
-        }
-
-
-        image_window_texture = SDL_CreateTextureFromSurface(image_renderer, surface);
-        SDL_FreeSurface(surface);
-
-        if (!image_window_texture) {
-            SDL_DestroyRenderer(image_renderer);
-            image_renderer = nullptr;
-            SDL_DestroyWindow(image_window);
-            image_window = nullptr;
-            status_text = "Failed to create texture";
-            return;
-        }
-
-        status_text = "Image window opened: " + node.name;
-
     }
     catch (const std::exception& e) {
-        status_text = "Error opening image window: " + std::string(e.what());
+        status_text = "Export error: " + std::string(e.what());
     }
 }
+
 void open_image_preview_window(const Core::FileNode& node) {
     try {
-
         if (image_window) {
             if (image_window_texture) {
                 SDL_DestroyTexture(image_window_texture);
@@ -427,7 +488,6 @@ void open_image_preview_window(const Core::FileNode& node) {
             SDL_DestroyWindow(image_window);
             image_window = nullptr;
         }
-
 
         std::vector<uint8_t> file_data = data_pack->GetFileData(node);
         const auto& info = std::get<Core::FileInfo>(node.data);
@@ -456,19 +516,16 @@ void open_image_preview_window(const Core::FileNode& node) {
         int original_width = surface->w;
         int original_height = surface->h;
 
-
         SDL_DisplayMode display_mode;
         SDL_GetCurrentDisplayMode(0, &display_mode);
         int screen_width = display_mode.w;
         int screen_height = display_mode.h;
-
 
         int max_width = (int)(screen_width * 0.9f);
         int max_height = (int)(screen_height * 0.9f);
 
         image_window_width = original_width;
         image_window_height = original_height;
-
 
         if (image_window_width > max_width || image_window_height > max_height) {
             float scale_w = (float)max_width / original_width;
@@ -480,7 +537,6 @@ void open_image_preview_window(const Core::FileNode& node) {
         }
 
         image_window_title = node.name + " (" + std::to_string(original_width) + "x" + std::to_string(original_height) + ")";
-
 
         image_window = SDL_CreateWindow(
             image_window_title.c_str(),
@@ -497,7 +553,6 @@ void open_image_preview_window(const Core::FileNode& node) {
             return;
         }
 
-
         image_renderer = SDL_CreateRenderer(image_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!image_renderer) {
             SDL_FreeSurface(surface);
@@ -506,7 +561,6 @@ void open_image_preview_window(const Core::FileNode& node) {
             status_text = "Failed to create renderer";
             return;
         }
-
 
         image_window_texture = SDL_CreateTextureFromSurface(image_renderer, surface);
         SDL_FreeSurface(surface);
@@ -520,13 +574,14 @@ void open_image_preview_window(const Core::FileNode& node) {
             return;
         }
 
-        status_text = "Image window opened: " + node.name;
+
 
     }
     catch (const std::exception& e) {
         status_text = "Error opening image window: " + std::string(e.what());
     }
 }
+
 void render_image_window() {
     if (!image_window || !image_renderer || !image_window_texture) return;
 
@@ -573,7 +628,6 @@ void export_file_as_png(const Core::FileNode& node) {
     }
 }
 
-
 void export_file_as_sct(const Core::FileNode& node) {
     try {
         auto f = pfd::save_file("Export as SCT", node.name,
@@ -614,6 +668,8 @@ void handle_node_click(const Core::FileNode* node, bool is_folder) {
         has_preview = false;
         preview_error = "";
         preview_atlas_data = "";
+        db_column_names.clear();
+        db_rows.clear();
     }
 
     last_click_time = current_time;
@@ -773,11 +829,9 @@ void draw_file_node(nk_context* ctx, const Core::FileNode& node, int depth = 0) 
 
             std::string file_label = node.name;
 
-
             if (nk_button_label_styled(ctx, &button_style, file_label.c_str())) {
                 handle_node_click(&node, false);
             }
-
 
             if (nk_input_is_mouse_hovering_rect(&ctx->input, nk_widget_bounds(ctx))) {
                 if (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_RIGHT)) {
@@ -838,7 +892,6 @@ int main(int argc, char* argv[]) {
                         running = false;
                     }
                     else if (image_window && windowID == SDL_GetWindowID(image_window)) {
-
                         if (image_window_texture) {
                             SDL_DestroyTexture(image_window_texture);
                             image_window_texture = nullptr;
@@ -851,7 +904,6 @@ int main(int argc, char* argv[]) {
                         image_window = nullptr;
                     }
                 }
-
             }
             nk_sdl_handle_event(&evt);
         }
@@ -877,13 +929,16 @@ int main(int argc, char* argv[]) {
                 status_text = "Extraction complete.";
             }
         }
+
         int window_width, window_height;
         SDL_GetWindowSize(win, &window_width, &window_height);
 
 
+
+
         if (show_context_menu && context_menu_node) {
             if (nk_begin(ctx, "Context Menu",
-                nk_rect(context_menu_pos.x, context_menu_pos.y, 180.0f, 150.0f),
+                nk_rect(context_menu_pos.x, context_menu_pos.y, 180.0f, 200.0f),
                 NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR)) {
 
                 if (std::holds_alternative<Core::FileInfo>(context_menu_node->data)) {
@@ -891,7 +946,13 @@ int main(int argc, char* argv[]) {
 
                     nk_layout_row_dynamic(ctx, 25, 1);
 
-                    if (is_sct_format(info.format)) {
+                    if (is_db_file(info.format)) {
+                        if (nk_button_label(ctx, "Export as JSON")) {
+                            export_db_as_json_file(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                    }
+                    else if (is_sct_format(info.format)) {
                         if (nk_button_label(ctx, "Export as PNG")) {
                             export_file_as_png(*context_menu_node);
                             show_context_menu = false;
@@ -917,7 +978,6 @@ int main(int argc, char* argv[]) {
                     }
 
                     if (nk_button_label(ctx, "Extract Raw")) {
-
                         try {
                             auto f = pfd::save_file("Extract File", context_menu_node->name, { "All Files", "*.*" });
                             if (!f.result().empty()) {
@@ -942,8 +1002,10 @@ int main(int argc, char* argv[]) {
             }
             nk_end(ctx);
         }
+
+
         if (show_export_options_window) {
-            if (nk_begin(ctx, "Export Options", nk_rect(window_width / 2 - 200, window_height / 2 - 100, 400, 250),
+            if (nk_begin(ctx, "Export Options", nk_rect(window_width / 2 - 200, window_height / 2 - 120, 400, 280),
                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE)) {
 
                 nk_layout_row_dynamic(ctx, 25, 1);
@@ -956,15 +1018,29 @@ int main(int argc, char* argv[]) {
                 nk_label(ctx, "When enabled, .sct/.sct2 files will be", NK_TEXT_LEFT);
                 nk_label(ctx, "automatically converted to PNG during extraction.", NK_TEXT_LEFT);
 
+                nk_layout_row_dynamic(ctx, 10, 1);
+                nk_spacing(ctx, 1);
+
+                nk_layout_row_dynamic(ctx, 30, 1);
+                nk_checkbox_label(ctx, "Convert DB files to JSON", (nk_bool*)&export_db_as_json);
+
+                nk_layout_row_dynamic(ctx, 20, 1);
+                nk_label(ctx, "When enabled, .db files will be", NK_TEXT_LEFT);
+                nk_label(ctx, "automatically converted to JSON during extraction.", NK_TEXT_LEFT);
+
                 nk_layout_row_dynamic(ctx, 25, 1);
-                std::string status = export_sct_as_png ? "Status: SCT conversion ENABLED" : "Status: SCT conversion DISABLED";
-                nk_label_colored(ctx, status.c_str(), NK_TEXT_LEFT,
+                std::string status1 = export_sct_as_png ? "SCT to PNG: ENABLED" : "SCT to PNG: DISABLED";
+                nk_label_colored(ctx, status1.c_str(), NK_TEXT_LEFT,
                     export_sct_as_png ? nk_rgb(100, 255, 100) : nk_rgb(255, 150, 150));
+
+                std::string status2 = export_db_as_json ? "DB to JSON: ENABLED" : "DB to JSON: DISABLED";
+                nk_label_colored(ctx, status2.c_str(), NK_TEXT_LEFT,
+                    export_db_as_json ? nk_rgb(100, 255, 100) : nk_rgb(255, 150, 150));
 
                 nk_layout_row_dynamic(ctx, 30, 2);
                 if (nk_button_label(ctx, "OK")) {
                     show_export_options_window = false;
-                    status_text = export_sct_as_png ? "SCT to PNG conversion enabled" : "SCT to PNG conversion disabled";
+                    status_text = "Options saved";
                 }
                 if (nk_button_label(ctx, "Cancel")) {
                     show_export_options_window = false;
@@ -976,50 +1052,6 @@ int main(int argc, char* argv[]) {
             nk_end(ctx);
         }
 
-        if (show_sct_preview_window && sct_preview_texture) {
-            if (nk_begin(ctx, "SCT Preview", nk_rect(50, 50, window_width - 100, window_height - 100),
-                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) {
-
-                nk_layout_row_dynamic(ctx, 30, 1);
-                std::string title_text = sct_preview_filename + " - " +
-                    std::to_string(sct_preview_width) + "x" + std::to_string(sct_preview_height);
-                nk_label(ctx, title_text.c_str(), NK_TEXT_CENTERED);
-
-                nk_layout_row_dynamic(ctx, 30, 2);
-                if (nk_button_label(ctx, "Save as PNG")) {
-
-                    if (context_menu_node) {
-                        export_file_as_png(*context_menu_node);
-                    }
-                }
-                if (nk_button_label(ctx, "Close")) {
-                    show_sct_preview_window = false;
-                }
-
-                float panel_width = window_width - 120.0f;
-                float panel_height = window_height - 200.0f;
-                float scale_w = panel_width / sct_preview_width;
-                float scale_h = panel_height / sct_preview_height;
-                float scale = (scale_w < scale_h) ? scale_w : scale_h;
-                if (scale > 1.0f) scale = 1.0f;
-
-                float img_w = sct_preview_width * scale;
-                float img_h = sct_preview_height * scale;
-
-                nk_layout_row_static(ctx, img_h, (int)img_w, 1);
-                struct nk_image img = nk_image_id((int)sct_preview_texture);
-                nk_image(ctx, img);
-
-            }
-            else {
-                show_sct_preview_window = false;
-                if (sct_preview_texture) {
-                    glDeleteTextures(1, &sct_preview_texture);
-                    sct_preview_texture = 0;
-                }
-            }
-            nk_end(ctx);
-        }
 
         if (show_credits_window) {
             if (nk_begin(ctx, "Credits", nk_rect(window_width / 2 - 200, window_height / 2 - 150, 400, 300),
@@ -1048,6 +1080,7 @@ int main(int argc, char* argv[]) {
             nk_end(ctx);
         }
 
+
         if (show_export_success) {
             if (nk_begin(ctx, "Success", nk_rect(window_width / 2 - 150, window_height / 2 - 50, 300, 100),
                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE)) {
@@ -1064,6 +1097,39 @@ int main(int argc, char* argv[]) {
             }
             nk_end(ctx);
         }
+
+
+        if (show_atlas_window && !preview_atlas_data.empty()) {
+            if (nk_begin(ctx, "Atlas Viewer", nk_rect(40, 40, (float)window_width - 80, (float)window_height - 80),
+                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) {
+
+                nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
+                nk_layout_row_push(ctx, 120);
+                if (nk_button_label(ctx, "Copy All")) SDL_SetClipboardText(preview_atlas_data.c_str());
+                nk_layout_row_push(ctx, 120);
+                if (nk_button_label(ctx, "Save As...")) {
+                    try {
+                        auto f = pfd::save_file("Save Atlas Text", "atlas.txt", { "Text", "*.txt", "All Files", "*.*" });
+                        if (!f.result().empty()) {
+                            std::ofstream out(f.result());
+                            if (out.is_open()) { out << preview_atlas_data; out.close(); }
+                        }
+                    }
+                    catch (...) {}
+                }
+                nk_layout_row_end(ctx);
+
+                if (atlas_text_buf.empty()) { atlas_text_buf.push_back('\0'); }
+                nk_layout_row_dynamic(ctx, (float)window_height - 180, 1);
+                nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX | NK_EDIT_READ_ONLY, atlas_text_buf.data(), (int)atlas_text_buf.size(), nk_filter_default);
+            }
+            else {
+                show_atlas_window = false;
+            }
+            nk_end(ctx);
+        }
+
+
         if (nk_begin(ctx, "Main", nk_rect(0, 0, (float)window_width, (float)window_height), NK_WINDOW_NO_SCROLLBAR)) {
             bool pack_loaded = (data_pack != nullptr);
             bool tree_scanned = pack_loaded && !std::get<Core::FolderInfo>(data_pack->GetFileTree().data).children.empty();
@@ -1098,6 +1164,8 @@ int main(int argc, char* argv[]) {
                         has_preview = false;
                         preview_error = "";
                         preview_atlas_data = "";
+                        db_column_names.clear();
+                        db_rows.clear();
                         search_query = "";
                         memset(search_buffer, 0, sizeof(search_buffer));
 
@@ -1133,6 +1201,8 @@ int main(int argc, char* argv[]) {
                     has_preview = false;
                     preview_error = "";
                     preview_atlas_data = "";
+                    db_column_names.clear();
+                    db_rows.clear();
 
                     if (preview_texture) {
                         glDeleteTextures(1, &preview_texture);
@@ -1166,9 +1236,10 @@ int main(int argc, char* argv[]) {
                         status_text = "Extracting all files...";
                         task_progress = 0.0f;
                         bool convert_sct = export_sct_as_png;
-                        task_future = std::async(std::launch::async, [dest_path, convert_sct]() {
+                        bool convert_db = export_db_as_json;
+                        task_future = std::async(std::launch::async, [dest_path, convert_sct, convert_db]() {
                             try {
-                                data_pack->Extract(data_pack->GetFileTree(), dest_path, task_progress, convert_sct);
+                                data_pack->Extract(data_pack->GetFileTree(), dest_path, task_progress, convert_sct, convert_db);
                             }
                             catch (...) {}
                             });
@@ -1197,9 +1268,10 @@ int main(int argc, char* argv[]) {
                         task_progress = 0.0f;
                         const Core::FileNode* node_to_extract = selected_node;
                         bool convert_sct = export_sct_as_png;
-                        task_future = std::async(std::launch::async, [dest_path, node_to_extract, convert_sct]() {
+                        bool convert_db = export_db_as_json;
+                        task_future = std::async(std::launch::async, [dest_path, node_to_extract, convert_sct, convert_db]() {
                             try {
-                                data_pack->Extract(*node_to_extract, dest_path, task_progress, convert_sct);
+                                data_pack->Extract(*node_to_extract, dest_path, task_progress, convert_sct, convert_db);
                             }
                             catch (...) {}
                             });
@@ -1215,12 +1287,12 @@ int main(int argc, char* argv[]) {
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Export JSON")) {
+            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Export filemap JSON")) {
                 export_to_json();
             }
             else if (!tree_scanned || is_task_running) {
                 nk_widget_disable_begin(ctx);
-                nk_button_label_styled(ctx, &btn_style, "Export JSON");
+                nk_button_label_styled(ctx, &btn_style, "Export filemap JSON");
                 nk_widget_disable_end(ctx);
             }
 
@@ -1246,13 +1318,13 @@ int main(int argc, char* argv[]) {
             nk_layout_row_end(ctx);
 
             float content_height = (float)window_height - 40;
-            bool showing_preview_panel = (has_preview || !preview_error.empty() || !preview_atlas_data.empty());
-            float left_width = showing_preview_panel ? (preview_atlas_data.empty() ? (float)window_width * 0.45f : (float)window_width * 0.28f)
+            bool showing_preview_panel = (has_preview || !preview_error.empty() || !preview_atlas_data.empty() || !db_rows.empty());
+            float left_width = showing_preview_panel ? (preview_atlas_data.empty() && db_rows.empty() ? (float)window_width * 0.45f : (float)window_width * 0.28f)
                 : (float)window_width - 20.0f;
             float right_width = (float)window_width - left_width - 30.0f;
 
             nk_layout_row_begin(ctx, NK_STATIC, content_height,
-                (has_preview || !preview_error.empty() || !preview_atlas_data.empty()) ? 2 : 1);
+                (has_preview || !preview_error.empty() || !preview_atlas_data.empty() || !db_rows.empty()) ? 2 : 1);
             nk_layout_row_push(ctx, left_width);
 
             if (nk_group_begin(ctx, "FileTree", NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
@@ -1270,148 +1342,239 @@ int main(int argc, char* argv[]) {
                 nk_group_end(ctx);
             }
 
-            if (has_preview || !preview_error.empty() || !preview_atlas_data.empty()) {
-                nk_layout_row_push(ctx, right_width);
-                if (nk_group_begin(ctx, "Preview", NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
-                    if (has_preview) {
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        std::string preview_title = "Image Preview: " + std::to_string(preview_width) +
-                            "x" + std::to_string(preview_height);
-                        nk_label(ctx, preview_title.c_str(), NK_TEXT_CENTERED);
+if (has_preview || !preview_error.empty() || !preview_atlas_data.empty() || !db_rows.empty()) {
+    nk_layout_row_push(ctx, right_width);
+    if (nk_group_begin(ctx, "Preview", NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+        static char search_query[128] = "";
 
 
-                        if (selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data)) {
-                            const auto& info = std::get<Core::FileInfo>(selected_node->data);
-                            if (is_sct_format(info.format)) {
-                                nk_layout_row_dynamic(ctx, 30, 3);
-                                if (nk_button_label(ctx, "Open Window")) {
-                                    open_image_preview_window(*selected_node);
-                                }
-                                if (nk_button_label(ctx, "Export PNG")) {
-                                    export_file_as_png(*selected_node);
-                                }
-                                if (nk_button_label(ctx, "Export SCT")) {
-                                    export_file_as_sct(*selected_node);
-                                }
-                            }
-                        }
+        if (has_preview) {
+            nk_layout_row_dynamic(ctx, 30, 1);
+            if (selected_node) {
+                std::string title = "Preview: " + selected_node->name;
+                nk_label(ctx, title.c_str(), NK_TEXT_CENTERED);
+            }
 
-                        float panel_width = right_width - 20;
-                        float panel_height = content_height - 100;
-                        float scale_w = panel_width / preview_width;
-                        float scale_h = panel_height / preview_height;
-                        float scale = (scale_w < scale_h) ? scale_w : scale_h;
-                        if (scale > 1.0f) scale = 1.0f;
+            nk_layout_row_dynamic(ctx, 25, 1);
+            std::string dims = std::to_string(preview_width) + " x " + std::to_string(preview_height);
+            nk_label_colored(ctx, dims.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
 
-                        float img_w = preview_width * scale;
-                        float img_h = preview_height * scale;
-
-                        nk_layout_row_static(ctx, img_h, (int)img_w, 1);
-                        struct nk_image img = nk_image_id((int)preview_texture);
-                        nk_image(ctx, img);
+            if (selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data)) {
+                const auto& info = std::get<Core::FileInfo>(selected_node->data);
+                if (is_previewable_format(info.format)) {
+                    nk_layout_row_dynamic(ctx, 30, 1);
+                    if (nk_button_label(ctx, "Open in Window")) {
+                        open_image_preview_window(*selected_node);
                     }
-                    else if (!preview_atlas_data.empty()) {
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        nk_label(ctx, "Atlas File Content:", NK_TEXT_CENTERED);
-
-                        nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Open Window")) show_atlas_window = true;
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Copy All")) SDL_SetClipboardText(preview_atlas_data.c_str());
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Save As...")) {
-                            try {
-                                auto f = pfd::save_file("Save Atlas Text", "atlas.txt", { "Text", "*.txt", "All Files", "*.*" });
-                                if (!f.result().empty()) {
-                                    std::ofstream out(f.result());
-                                    if (out.is_open()) { out << preview_atlas_data; out.close(); }
-                                }
-                            }
-                            catch (...) {}
-                        }
-                        nk_layout_row_end(ctx);
-
-                        if (atlas_text_buf.empty()) { atlas_text_buf.push_back('\0'); }
-                        nk_layout_row_dynamic(ctx, content_height - 80, 1);
-                        nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX | NK_EDIT_READ_ONLY, atlas_text_buf.data(), (int)atlas_text_buf.size(), nk_filter_default);
-                    }
-                    else if (!preview_error.empty()) {
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        nk_label(ctx, "Preview Error:", NK_TEXT_CENTERED);
-                        nk_layout_row_dynamic(ctx, 20, 1);
-
-                        size_t pos = 0;
-                        std::string error_copy = preview_error;
-                        while (pos < error_copy.length()) {
-                            size_t newline = error_copy.find('\n', pos);
-                            if (newline == std::string::npos) {
-                                nk_label_colored(ctx, error_copy.substr(pos).c_str(),
-                                    NK_TEXT_CENTERED, nk_rgb(255, 150, 150));
-                                break;
-                            }
-                            nk_label_colored(ctx, error_copy.substr(pos, newline - pos).c_str(),
-                                NK_TEXT_CENTERED, nk_rgb(255, 150, 150));
-                            pos = newline + 1;
-                        }
-                    }
-                    nk_group_end(ctx);
                 }
             }
 
+            float max_preview_width = right_width - 40.0f;
+            float max_preview_height = content_height - 180.0f;
+
+            float scale_w = max_preview_width / preview_width;
+            float scale_h = max_preview_height / preview_height;
+            float scale = (scale_w < scale_h) ? scale_w : scale_h;
+            if (scale > 1.0f) scale = 1.0f;
+
+            float display_width = preview_width * scale;
+            float display_height = preview_height * scale;
+
+
+            nk_layout_row_begin(ctx, NK_STATIC, display_height, 1);
+            nk_layout_row_push(ctx, display_width);
+            struct nk_command_buffer* canvas = nk_window_get_canvas(ctx);
+            struct nk_rect bounds = nk_widget_bounds(ctx);
+            struct nk_image img = nk_image_id((int)preview_texture);
+            nk_draw_image(canvas, bounds, &img, nk_rgb(255, 255, 255));
             nk_layout_row_end(ctx);
+        }
+
+        else if (!db_rows.empty()) {
+            nk_layout_row_dynamic(ctx, 30, 1);
+            std::string preview_title = "Database Preview: " + db_filename;
+            nk_label_colored(ctx, preview_title.c_str(), NK_TEXT_CENTERED, nk_rgb(150, 200, 255));
 
             nk_layout_row_dynamic(ctx, 25, 1);
-            nk_size current_progress = (nk_size)(task_progress * 100.0f);
-            nk_progress(ctx, &current_progress, 100, NK_FIXED);
-            nk_layout_row_dynamic(ctx, 28, 1);
-            std::string full_status = status_text;
-            if (selection_exists) {
-                try {
-                    if (std::holds_alternative<Core::FileInfo>(selected_node->data)) {
-                        const auto& info = std::get<Core::FileInfo>(selected_node->data);
-                        full_status += " | Selected: " + selected_node->name + " (" + format_size(info.size) + ")";
+            std::string stats = std::to_string(db_rows.size()) + " rows × " + std::to_string(db_column_names.size()) + " columns";
+            nk_label_colored(ctx, stats.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
+
+            if (nk_button_label(ctx, "Export as JSON")) {
+                if (selected_node) {
+                    export_db_as_json_file(*selected_node);
+                }
+            }
+
+            nk_layout_row_dynamic(ctx, 25, 1);
+            nk_label_colored(ctx, "Preview:", NK_TEXT_LEFT, nk_rgb(200, 200, 200));
+
+
+            static char search_query[128] = "";
+            nk_layout_row_begin(ctx, NK_STATIC, 28, 2);
+            nk_layout_row_push(ctx, 80);
+            nk_label(ctx, "Search:", NK_TEXT_LEFT);
+            nk_layout_row_push(ctx, right_width - 100);
+            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, search_query, sizeof(search_query), nk_filter_default);
+            nk_layout_row_end(ctx);
+
+            float preview_table_height = content_height - 230;
+            nk_layout_row_dynamic(ctx, preview_table_height, 1);
+
+            if (nk_group_begin(ctx, "DBPreviewTable", NK_WINDOW_BORDER)) {
+
+                float base_width = 100.0f;
+                std::vector<float> col_widths(db_column_names.size(), base_width);
+                for (size_t j = 0; j < db_column_names.size(); j++) {
+                    size_t max_len = db_column_names[j].length();
+                    for (const auto& row : db_rows) {
+                        if (j < row.size() && row[j].length() > max_len)
+                            max_len = row[j].length();
                     }
-                    else {
-                        full_status += " | Selected: " + selected_node->name + " (" +
-                            std::to_string(get_file_count(*selected_node)) + " files)";
+                    col_widths[j] = std::min(std::max(7.5f * max_len, 120.0f), 400.0f);
+                }
+
+
+                float index_col_width = 60.0f;
+
+
+                nk_layout_row_begin(ctx, NK_STATIC, 40, (int)db_column_names.size() + 1);
+
+
+                nk_layout_row_push(ctx, index_col_width);
+                struct nk_rect bounds = nk_widget_bounds(ctx);
+                nk_fill_rect(&ctx->current->buffer, bounds, 0, nk_rgb(60, 70, 90));
+                nk_label_colored(ctx, "#", NK_TEXT_CENTERED, nk_rgb(220, 230, 255));
+
+
+                for (size_t j = 0; j < db_column_names.size(); j++) {
+                    nk_layout_row_push(ctx, col_widths[j]);
+                    struct nk_rect bounds = nk_widget_bounds(ctx);
+                    nk_fill_rect(&ctx->current->buffer, bounds, 0, nk_rgb(60, 70, 90));
+                    nk_label_colored(ctx, db_column_names[j].c_str(), NK_TEXT_CENTERED, nk_rgb(220, 230, 255));
+                }
+                nk_layout_row_end(ctx);
+
+
+                size_t preview_rows = db_rows.size();
+                int visible_index = 1;
+                for (size_t i = 0; i < preview_rows; i++) {
+                    bool match = false;
+                    if (strlen(search_query) == 0) {
+                        match = true;
+                    } else {
+                        for (const auto& cell : db_rows[i]) {
+                            if (cell.find(search_query) != std::string::npos) {
+                                match = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!match) continue;
+
+                    struct nk_color row_color = (visible_index % 2 == 0) ? nk_rgb(45, 45, 50) : nk_rgb(40, 40, 45);
+                    nk_layout_row_begin(ctx, NK_STATIC, 38, (int)db_column_names.size() + 1);
+
+
+                    nk_layout_row_push(ctx, index_col_width);
+                    struct nk_rect index_bounds = nk_widget_bounds(ctx);
+                    nk_fill_rect(&ctx->current->buffer, index_bounds, 0, row_color);
+
+                    std::string row_index = std::to_string(visible_index++);
+                    nk_label_colored(ctx, row_index.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 200, 255));
+
+
+                    for (size_t j = 0; j < db_rows[i].size(); j++) {
+                        nk_layout_row_push(ctx, col_widths[j]);
+                        struct nk_rect bounds = nk_widget_bounds(ctx);
+                        nk_fill_rect(&ctx->current->buffer, bounds, 0, row_color);
+
+                        std::string cell_text = db_rows[i][j];
+                        int max_chars = (int)(col_widths[j] / 7);
+                        if (cell_text.length() > max_chars)
+                            cell_text = cell_text.substr(0, max_chars - 3) + "...";
+
+                        nk_label_colored(ctx, cell_text.c_str(), NK_TEXT_LEFT, nk_rgb(200, 200, 200));
+                    }
+                    nk_layout_row_end(ctx);
+                }
+
+                nk_group_end(ctx);
+            }
+        }
+
+        else if (!preview_atlas_data.empty()) {
+            nk_layout_row_dynamic(ctx, 25, 1);
+
+            bool is_db_error = (preview_error.find("DB parsing error") != std::string::npos);
+            if (is_db_error) {
+                nk_label_colored(ctx, "DB File - Raw JSON Output:", NK_TEXT_CENTERED, nk_rgb(255, 200, 100));
+                nk_layout_row_dynamic(ctx, 20, 1);
+                nk_label_colored(ctx, "(Could not parse as structured data)", NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
+            } else {
+                nk_label(ctx, "Atlas File Content:", NK_TEXT_CENTERED);
+            }
+
+            nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
+            if (!is_db_error) {
+                nk_layout_row_push(ctx, 120);
+                if (nk_button_label(ctx, "Open Window")) show_atlas_window = true;
+            }
+            nk_layout_row_push(ctx, 120);
+            if (nk_button_label(ctx, "Copy All")) SDL_SetClipboardText(preview_atlas_data.c_str());
+            nk_layout_row_push(ctx, 120);
+            if (nk_button_label(ctx, "Save As...")) {
+                try {
+                    std::string ext = is_db_error ? ".json" : ".txt";
+                    std::string filter = is_db_error ? "JSON Files" : "Text";
+                    auto f = pfd::save_file("Save " + filter, "output" + ext, { filter, "*" + ext, "All Files", "*.*" });
+                    if (!f.result().empty()) {
+                        std::ofstream out(f.result());
+                        if (out.is_open()) { out << preview_atlas_data; out.close(); }
                     }
                 }
                 catch (...) {}
             }
-            nk_label(ctx, full_status.c_str(), NK_TEXT_LEFT);
+            nk_layout_row_end(ctx);
+
+
+            nk_layout_row_dynamic(ctx, content_height - 120, 1);
+            if (nk_group_begin(ctx, "TextPreview", NK_WINDOW_BORDER)) {
+                std::stringstream ss(preview_atlas_data);
+                std::string line;
+                while (std::getline(ss, line)) {
+                    nk_layout_row_dynamic(ctx, 20, 1);
+                    nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
+                }
+                nk_group_end(ctx);
+            }
+        }
+
+        else if (!preview_error.empty()) {
+            nk_layout_row_dynamic(ctx, 30, 1);
+            nk_label(ctx, "Preview Error", NK_TEXT_CENTERED);
+            nk_layout_row_dynamic(ctx, content_height - 100, 1);
+            nk_label_colored(ctx, preview_error.c_str(), NK_TEXT_CENTERED, nk_rgb(255, 100, 100));
+        }
+
+        nk_group_end(ctx);
+    }
+}
+
+            nk_layout_row_end(ctx);
+
+            nk_layout_row_dynamic(ctx, 28, 1);
+            if (selection_exists) {
+                try {
+                    if (std::holds_alternative<Core::FileInfo>(selected_node->data)) {
+                        const auto& info = std::get<Core::FileInfo>(selected_node->data);
+
+                    }
+                }
+                catch (...) {}
+            }
         }
         nk_end(ctx);
-
-        if (show_atlas_window && !preview_atlas_data.empty()) {
-            if (nk_begin(ctx, "Atlas Viewer", nk_rect(40, 40, (float)window_width - 80, (float)window_height - 80),
-                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) {
-
-                nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
-                nk_layout_row_push(ctx, 120);
-                if (nk_button_label(ctx, "Copy All")) SDL_SetClipboardText(preview_atlas_data.c_str());
-                nk_layout_row_push(ctx, 120);
-                if (nk_button_label(ctx, "Save As...")) {
-                    try {
-                        auto f = pfd::save_file("Save Atlas Text", "atlas.txt", { "Text", "*.txt", "All Files", "*.*" });
-                        if (!f.result().empty()) {
-                            std::ofstream out(f.result());
-                            if (out.is_open()) { out << preview_atlas_data; out.close(); }
-                        }
-                    }
-                    catch (...) {}
-                }
-                nk_layout_row_end(ctx);
-
-                if (atlas_text_buf.empty()) { atlas_text_buf.push_back('\0'); }
-                nk_layout_row_dynamic(ctx, (float)window_height - 180, 1);
-                nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX | NK_EDIT_READ_ONLY, atlas_text_buf.data(), (int)atlas_text_buf.size(), nk_filter_default);
-            }
-            else {
-                show_atlas_window = false;
-            }
-            nk_end(ctx);
-        }
 
         glViewport(0, 0, window_width, window_height);
         glClear(GL_COLOR_BUFFER_BIT);

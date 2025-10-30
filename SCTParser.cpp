@@ -3,6 +3,7 @@
 #include <cstring>
 #include <algorithm>
 #include <stdexcept>
+#include "Logger.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -301,6 +302,18 @@ namespace SCTParser {
         initialize_astc();
 
 
+        if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
+            LogError("ASTC decode: invalid dimensions");
+            return std::vector<uint8_t>();
+        }
+        int blocks_x = (width + block_width - 1) / block_width;
+        int blocks_y = (height + block_height - 1) / block_height;
+        size_t expected_size = static_cast<size_t>(blocks_x) * static_cast<size_t>(blocks_y) * 16;
+        if (compressed_data.size() < expected_size) {
+            LogError(std::string("ASTC data too small: expected ") + std::to_string(expected_size) + ", got " + std::to_string(compressed_data.size()));
+            return std::vector<uint8_t>();
+        }
+
         astcenc_config config;
         astcenc_error status = astcenc_config_init(
             ASTCENC_PRF_LDR,
@@ -351,7 +364,6 @@ namespace SCTParser {
 
         if (status != ASTCENC_SUCCESS) {
             std::cerr << "Error: astcenc_decompress_image failed (" << status << ")\n";
-
             std::fill(rgba.begin(), rgba.end(), 128);
         }
 
@@ -485,6 +497,10 @@ namespace SCTParser {
 
             int width = header.width;
             int height = header.height;
+            if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
+                LogError("SCT ConvertToPNG: invalid dimensions");
+                return {};
+            }
             std::vector<uint8_t> final_rgba_data;
             bool has_alpha = false;
 
@@ -501,12 +517,14 @@ namespace SCTParser {
             else if (format_info.type == "ASTC_4x4") {
                 if (verbose) std::cout << "Decoding ASTC 4x4...\n";
                 final_rgba_data = DecodeASTC(image_data, width, height, 4, 4);
+                if (final_rgba_data.empty()) { LogError("ASTC 4x4 decode failed"); return {}; }
                 BGRASwapRB(final_rgba_data);
                 has_alpha = true;
             }
             else if (format_info.type == "ASTC_8x8") {
                 if (verbose) std::cout << "Decoding ASTC 8x8...\n";
                 final_rgba_data = DecodeASTC(image_data, width, height, 8, 8);
+                if (final_rgba_data.empty()) { LogError("ASTC 8x8 decode failed"); return {}; }
                 BGRASwapRB(final_rgba_data);
                 has_alpha = true;
             }
@@ -516,8 +534,9 @@ namespace SCTParser {
                 has_alpha = format_info.format.find("RGBA") != std::string::npos || header.has_alpha;
             }
 
-            if (final_rgba_data.empty()) {
+            if (final_rgba_data.empty() || final_rgba_data.size() < static_cast<size_t>(width) * height * 4) {
                 if (verbose) std::cout << "Error: No valid image data produced\n";
+                LogError("SCT ConvertToPNG: RGBA buffer invalid size");
                 return {};
             }
 
@@ -534,6 +553,7 @@ namespace SCTParser {
 
             if (result == 0) {
                 if (verbose) std::cout << "Error: PNG encoding failed\n";
+                LogError("SCT ConvertToPNG: PNG encoding failed");
                 return {};
             }
 
@@ -542,6 +562,7 @@ namespace SCTParser {
         }
         catch (const std::exception& e) {
             if (verbose) std::cout << "Error during conversion: " << e.what() << "\n";
+            LogError(std::string("SCT ConvertToPNG exception: ") + e.what());
             return {};
         }
     }
