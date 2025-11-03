@@ -194,6 +194,20 @@ namespace SCTParser {
         }
     }
 
+    std::vector<uint8_t> L8ToRGBA(const std::vector<uint8_t>& data) {
+    std::vector<uint8_t> rgba(data.size() * 4);
+    
+    for (size_t i = 0; i < data.size(); i++) {
+        uint8_t gray = data[i];
+        rgba[i * 4 + 0] = gray;  // R
+        rgba[i * 4 + 1] = gray;  // G
+        rgba[i * 4 + 2] = gray;  // B
+        rgba[i * 4 + 3] = 255;   // A 
+    }
+    
+    return rgba;
+}
+
     PixelFormatInfo GetPixelFormatInfo(int format_code) {
         static const std::map<int, PixelFormatInfo> format_map = {
             {4, {"RGB", 3, "RGB565_LE"}},
@@ -201,7 +215,9 @@ namespace SCTParser {
             {16, {"RGB", 3, "RGB565"}},
             {19, {"RGBA", 4, "ETC2_RGBA8"}},
             {40, {"RGBA", 4, "ASTC_4x4"}},
-            {47, {"RGBA", 4, "ASTC_8x8"}}
+            {44, {"RGBA", 4, "ASTC_6x6"}},
+            {47, {"RGBA", 4, "ASTC_8x8"}},
+            {102, {"L", 1, "L8"}}
         };
 
         auto it = format_map.find(format_code);
@@ -213,7 +229,7 @@ namespace SCTParser {
             return { "RGBA", 4, "RGBA" };
         }
 
-        std::vector<int> excluded = { 47 };
+        std::vector<int> excluded = { 44, 47 };
         if (format_code >= 41 && format_code <= 53 &&
             std::find(excluded.begin(), excluded.end(), format_code) == excluded.end()) {
             return { "RGBA", 4, "COMPRESSED" };
@@ -504,7 +520,13 @@ namespace SCTParser {
             std::vector<uint8_t> final_rgba_data;
             bool has_alpha = false;
 
-            if (format_info.type == "RGB565_LE") {
+            if(format_info.type == "L8")
+            {
+                if (verbose) std::cout<< "Decoding L8...\n";
+                final_rgba_data = L8ToRGBA(image_data);
+                has_alpha = false;
+            }
+            else if (format_info.type == "RGB565_LE") {
                 if (verbose) std::cout << "Decoding RGB565 Little Endian...\n";
                 auto rgb_data = RGB565LEToRGB(image_data);
                 final_rgba_data = RGBToRGBA(rgb_data);
@@ -518,6 +540,13 @@ namespace SCTParser {
                 if (verbose) std::cout << "Decoding ASTC 4x4...\n";
                 final_rgba_data = DecodeASTC(image_data, width, height, 4, 4);
                 if (final_rgba_data.empty()) { LogError("ASTC 4x4 decode failed"); return {}; }
+                BGRASwapRB(final_rgba_data);
+                has_alpha = true;
+            }
+            else if(format_info.type == "ASTC_6x6"){
+                if (verbose) std::cout << "Decoding ASTC 6x6...\n";
+                final_rgba_data = DecodeASTC(image_data, width, height, 6, 6);
+                if(final_rgba_data.empty()) { LogError("ASTC 6x6 decode failed"); return {};}
                 BGRASwapRB(final_rgba_data);
                 has_alpha = true;
             }
