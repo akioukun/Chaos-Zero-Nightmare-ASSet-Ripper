@@ -135,13 +135,23 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
         if ((cursor & 0xFFFF) == 0) {
             progress = (float)cursor / file_size_;
         }
+        
+        if (cursor + 15 > file_size_) break;  
+        
+        if (cursor < 4) {
+            cursor++;
+            continue;
+        }
 
-        if (cursor + 1 > file_size_) break;
+        size_t header_offset = cursor - 4;
+        
+        if ((mapped_data_[cursor] ^ key[cursor % Core::KEY_SIZE]) != 0x02) {
+            cursor++;
+            continue;
+        }
 
-        if ((mapped_data_[cursor] ^ key[cursor % Core::KEY_SIZE]) == 0x02) {
-            size_t header_offset = cursor - 4;
 
-            if (header_offset < 0 || header_offset + 15 > file_size_) {
+            if (header_offset + 15 > file_size_) {
                 cursor++;
                 continue;
             }
@@ -153,16 +163,19 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
             uint8_t path_len = header_buffer[5];
             uint32_t data_len = *(uint32_t*)&header_buffer[6];
 
-            if (container_len > file_size_ || path_len == 0 || path_len > 1024 || data_len > file_size_) {
-                cursor++;
-                continue;
-            }
+        if (container_len > file_size_ || 
+            path_len == 0 || 
+            path_len > 1024 || 
+            data_len > file_size_ ||
+            container_len != path_len + data_len + 19) {
+            cursor++;
+            continue;
+        }
 
-            if (container_len == path_len + data_len + 19) {
-                if (header_offset + 15 + path_len > file_size_) {
-                    cursor++;
-                    continue;
-                }
+        if (header_offset + 15 + path_len + data_len > file_size_) {
+            cursor++;
+            continue;
+        }
 
                 std::vector<uint8_t> path_buffer(path_len);
                 memcpy(path_buffer.data(), &mapped_data_[header_offset + 15], path_len);
@@ -171,14 +184,9 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
 
                 uint32_t file_offset = header_offset + 15 + path_len;
 
-                if (file_offset + data_len <= file_size_) {
-                    AddFileToTree(path_str, file_offset, data_len);
-                    cursor = file_offset + data_len;
-                    continue;
-                }
-            }
-        }
-        cursor++;
+        AddFileToTree(path_str, file_offset, data_len);
+        
+        cursor = header_offset + 4 + container_len;
     }
 }
 
