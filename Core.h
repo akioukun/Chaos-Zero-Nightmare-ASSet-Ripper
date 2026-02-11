@@ -15,8 +15,8 @@ namespace Core {
     struct FileNode;
 
     struct FileInfo {
-        uint32_t offset;
-        uint32_t size;
+        uint64_t offset;
+        uint64_t size;
         std::string format;
     };
 

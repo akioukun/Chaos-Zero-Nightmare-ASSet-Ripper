@@ -182,9 +182,9 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
                 Core::xor_buffer(path_buffer.data(), path_len, header_offset + 15);
                 std::string path_str((char*)path_buffer.data(), path_len);
 
-                uint32_t file_offset = header_offset + 15 + path_len;
+                uint64_t file_offset = header_offset + 15 + path_len;
 
-        AddFileToTree(path_str, file_offset, data_len);
+        AddFileToTree(path_str, static_cast<uint64_t>(file_offset), static_cast<uint64_t>(data_len));
         
         cursor = header_offset + 4 + container_len;
     }
@@ -228,10 +228,10 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
             }
 
             std::string path_str((char*)&mapped_data_[header_offset + 15], path_len);
-            uint32_t file_offset = header_offset + 15 + path_len;
+            uint64_t file_offset = header_offset + 15 + path_len;
 
             if (file_offset + data_len <= file_size_) {
-                AddFileToTree(path_str, file_offset, data_len);
+                AddFileToTree(path_str, static_cast<uint64_t>(file_offset), static_cast<uint64_t>(data_len));
                 cursor = file_offset + data_len;
             }
             else {
@@ -244,7 +244,7 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
     }
 }
 
-void DataPack::AddFileToTree(const std::string& path, uint32_t offset, uint32_t size) {
+void DataPack::AddFileToTree(const std::string& path, uint64_t offset, uint64_t size) {
     try {
         std::filesystem::path p(path);
         auto* current_folder_info = &std::get<Core::FolderInfo>(root_node_.data);
