@@ -6,9 +6,11 @@
 #include <iomanip>
 #include <map>
 #include "Logger.h"
+#include "json.hpp"
 
 namespace DBParser
 {
+    using json = nlohmann::json;
 
     static constexpr const char *KEY_HEX = "91AE4ED4644F585162EC1BD5EF24ADDBAF838242AEF51E97804B134FFD8CE5BB4F6E3E6451147CDF56C318E5E964C999C0D95CC860822E6B418BE465D79A036DBF67AB3DA72AB1023A4561F444E5CE858D23EA10FEB4899151AD7E43FF3E2419A97B4DD3AF4EF5C829E5AF4ACE9436F6B6B6382E9DFD26642099011A4899089C9D4B9F80BBB00A4CC73255CE1F78646E91C9C12313F5D840DC51457010D37D19615BB69888B42B19E749F993C00337E9332F89B320C173A5653848788798A771739E72DBC84C7946597149BDDAE4E3BD1A17856C85A555CFA24F6352D005933B50042BE0BA4C708DE8EBB52059B2059C9BFE90D8923DF74B43911BBC00BB6BFA";
 
@@ -196,7 +198,8 @@ namespace DBParser
             }
 
             // Build final JSON
-            ss << "[\n";
+            json root_json = json::array();
+
             for (uint32_t row = 0; row < rows; row++)
             {
                 std::string entryKey = "\t\t" + std::to_string(row);
@@ -222,24 +225,18 @@ namespace DBParser
                         }
 
                         // Generate JSON for the row
-                        ss << "  {\n";
+                        json row_obj = json::object();
                         for (size_t i = 0; i < colNames.size() && i < values.size(); i++)
                         {
-                            ss << "    \"" << colNames[i] << "\": \"" << values[i] << "\"";
-                            if (i < colNames.size() - 1 && i < values.size() - 1)
-                                ss << ",";
-                            ss << "\n";
+                            row_obj[colNames[i]] = values[i];
                         }
-                        ss << "  }";
-                        if (row < rows - 1)
-                            ss << ",";
-                        ss << "\n";
+                        root_json.push_back(row_obj);
                     }
                 }
             }
-            ss << "]";
 
-            return ss.str();
+            return root_json.dump(2, ' ', false);
+
         } catch (const std::exception&) {
             return "{}";
         } catch (...) {
@@ -312,8 +309,7 @@ namespace DBParser
                         chunk.nextEntry = nextEntryLo + (static_cast<uint64_t>(nextEntryHi) << 32);
                         std::string fileName(reinterpret_cast<const char *>(&decrypted[currentPos]), chunk.fileNameLength);
                         currentPos += chunk.fileNameLength;
-                        std::vector<uint8_t> fileData(decrypted.begin() + currentPos,
-                                                      decrypted.begin() + currentPos + chunk.fileSize);
+                        std::vector<uint8_t> fileData(decrypted.begin() + currentPos, decrypted.begin() + currentPos + chunk.fileSize);
                         currentPos += chunk.fileSize;
                         entries[fileName] = std::move(fileData);
                         if (chunk.nextEntry == 0) break;
@@ -334,7 +330,9 @@ namespace DBParser
                 if (it != entries.end()) colNames.push_back(std::string(it->second.begin(), it->second.end()));
             }
 
-            out << "[\n";
+            // Build final JSON
+            json root_json = json::array();
+
             for (uint32_t row = 0; row < rows; row++) {
                 if ((row % 1000) == 0) LogInfo(std::string("DB JSON rows written: ") + std::to_string(row));
                 std::string entryKey = "\t\t" + std::to_string(row);
@@ -346,24 +344,21 @@ namespace DBParser
                         size_t start = 0;
                         for (size_t i = 0; i < actualEntryIt->second.size(); i++) {
                             if (actualEntryIt->second[i] == 0) {
-                                values.push_back(std::string(actualEntryIt->second.begin() + start,
-                                                            actualEntryIt->second.begin() + i));
+                                values.push_back(std::string(actualEntryIt->second.begin() + start, actualEntryIt->second.begin() + i));
                                 start = i + 1;
                             }
                         }
-                        out << "  {\n";
+                        
+                        json row_obj = json::object();
                         for (size_t i = 0; i < colNames.size() && i < values.size(); i++) {
-                            out << "    \"" << colNames[i] << "\": \"" << values[i] << "\"";
-                            if (i < colNames.size() - 1 && i < values.size() - 1) out << ",";
-                            out << "\n";
+                            row_obj[colNames[i]] = values[i];
                         }
-                        out << "  }";
-                        if (row < rows - 1) out << ",";
-                        out << "\n";
+                        root_json.push_back(row_obj);
                     }
                 }
             }
-            out << "]";
+            
+            out << root_json.dump(2, ' ', false);
             LogInfo("DB ConvertToJsonToStream end");
             return true;
         } catch (...) {
