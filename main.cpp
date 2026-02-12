@@ -32,6 +32,7 @@
 #include "Core.h"
 #include "SCTParser.h"
 #include "DBParser.h"
+#include "SCSPParser.h"
 #include "json.hpp"
 
 #define INITIAL_WINDOW_WIDTH 1400
@@ -45,10 +46,11 @@
 #define ICON_ATLAS ""
 #define ICON_DATABASE ""
 
-using json = nlohmann::json;
+using json = nlohmann::ordered_json;
 
 static std::unique_ptr<DataPack> data_pack = nullptr;
 static Core::FileNode const *selected_node = nullptr;
+static std::unordered_set<const Core::FileNode *> selected_file_nodes;
 static std::future<void> task_future;
 static std::atomic<float> task_progress = 0.0f;
 static std::atomic<bool> is_task_running = false;
@@ -225,6 +227,13 @@ bool is_db_file(const std::string &ext)
     return ext_lower == ".db";
 }
 
+bool is_scsp_file(const std::string &ext)
+{
+    std::string ext_lower = ext;
+    std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
+    return ext_lower == ".scsp";
+}
+
 bool is_previewable_format(const std::string &ext)
 {
     std::string ext_lower = ext;
@@ -276,7 +285,7 @@ std::string get_file_icon(const std::string &ext)
     {
         return ICON_ATLAS;
     }
-    else if (ext_lower == ".db" || ext_lower == ".json")
+    else if (ext_lower == ".db" || ext_lower == ".json" || ext_lower == ".scsp")
     {
         return ICON_DATABASE;
     }
@@ -428,6 +437,48 @@ void load_db_preview(const Core::FileNode &node)
     }
 }
 
+void load_scsp_preview(const Core::FileNode &node)
+{
+    try
+    {
+        preview_json_data = "";
+        current_preview_mode = PreviewMode::None;
+
+        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        if (file_data.empty())
+        {
+            preview_error = "Failed to read SCSP file";
+            return;
+        }
+
+        std::string json_str = SCSPParser::ConvertSCSPToJson(file_data);
+        if (!json_str.empty())
+        {
+            try
+            {
+                json parsed = json::parse(json_str);
+                preview_json_data = parsed.dump(2);
+            }
+            catch (...)
+            {
+                preview_json_data = json_str;
+            }
+            current_preview_mode = PreviewMode::JSON;
+        }
+        else
+        {
+            preview_error = "Failed to parse SCSP file";
+        }
+
+        preview_error = "";
+    }
+    catch (const std::exception &e)
+    {
+        preview_error = "SCSP parsing error: " + std::string(e.what());
+        current_preview_mode = PreviewMode::None;
+    }
+}
+
 void load_text_preview(const Core::FileNode &node)
 {
     try
@@ -488,6 +539,12 @@ void load_image_preview(const Core::FileNode &node)
         if (is_db_file(info.format))
         {
             load_db_preview(node);
+            return;
+        }
+
+        if (is_scsp_file(info.format))
+        {
+            load_scsp_preview(node);
             return;
         }
 
@@ -667,6 +724,58 @@ void export_db_as_json_file(const Core::FileNode &node)
             else
             {
                 status_text = "Failed to convert DB to JSON";
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        status_text = "Export error: " + std::string(e.what());
+    }
+}
+
+void export_scsp_as_json_file(const Core::FileNode &node)
+{
+    try
+    {
+        std::string default_name = node.name;
+        size_t dot_pos = default_name.find_last_of('.');
+        if (dot_pos != std::string::npos)
+        {
+            default_name = default_name.substr(0, dot_pos);
+        }
+        default_name += ".json";
+
+        auto f = pfd::save_file("Export SCSP as JSON", default_name,
+                                {"JSON Files", "*.json", "All Files", "*.*"});
+
+        if (!f.result().empty())
+        {
+            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::string json_str = SCSPParser::ConvertSCSPToJson(file_data);
+
+            if (!json_str.empty())
+            {
+                try
+                {
+                    json parsed = json::parse(json_str);
+                    std::string formatted_json = parsed.dump(2);
+
+                    std::ofstream out(f.result());
+                    out << formatted_json;
+                    out.close();
+                    status_text = "Exported SCSP to JSON: " + f.result();
+                }
+                catch (const json::parse_error &e)
+                {
+                    std::ofstream out(f.result());
+                    out << json_str;
+                    out.close();
+                    status_text = "Exported SCSP to JSON (unformatted): " + f.result();
+                }
+            }
+            else
+            {
+                status_text = "Failed to convert SCSP to JSON";
             }
         }
     }
@@ -874,6 +983,7 @@ void export_file_as_sct(const Core::FileNode &node)
 
 void handle_node_click(const Core::FileNode *node, bool is_folder)
 {
+    bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
     Uint32 current_time = SDL_GetTicks();
     Uint32 time_diff = current_time - last_click_time;
 
@@ -887,14 +997,40 @@ void handle_node_click(const Core::FileNode *node, bool is_folder)
 
     if (!is_folder)
     {
-        if (selected_node != node)
+        if (ctrl_pressed)
         {
+            if (selected_file_nodes.find(node) != selected_file_nodes.end())
+            {
+                selected_file_nodes.erase(node);
+            }
+            else
+            {
+                selected_file_nodes.insert(node);
+            }
             selected_node = node;
             load_image_preview(*node);
+        }
+        else
+        {
+            selected_file_nodes.clear();
+            selected_file_nodes.insert(node);
+            if (selected_node != node)
+            {
+                selected_node = node;
+                load_image_preview(*node);
+            }
+            else
+            {
+                selected_node = node;
+            }
         }
     }
     else
     {
+        if (!ctrl_pressed)
+        {
+            selected_file_nodes.clear();
+        }
         if (selected_node != node)
             selected_node = node;
         has_preview = false;
@@ -1061,7 +1197,7 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
                 return;
 
             const auto &file_info = std::get<Core::FileInfo>(node.data);
-            bool is_selected = (selected_node == &node);
+            bool is_selected = (selected_file_nodes.find(&node) != selected_file_nodes.end()) || (selected_node == &node);
 
             struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
             if (is_selected)
@@ -1130,7 +1266,7 @@ int main(int argc, char *argv[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window *win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.2",
+    SDL_Window *win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.3",
                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
                                        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -1297,6 +1433,14 @@ int main(int argc, char *argv[])
                             show_context_menu = false;
                         }
                     }
+                    else if (is_scsp_file(info.format))
+                    {
+                        if (nk_button_label(ctx, "Export as JSON"))
+                        {
+                            export_scsp_as_json_file(*context_menu_node);
+                            show_context_menu = false;
+                        }
+                    }
                     else if (is_sct_format(info.format))
                     {
                         if (nk_button_label(ctx, "Export as PNG"))
@@ -1417,21 +1561,20 @@ int main(int argc, char *argv[])
 
         if (show_credits_window)
         {
-            if (nk_begin(ctx, "Credits", nk_rect(window_width / 2 - 250, window_height / 2 - 150, 600, 300),
+            if (nk_begin(ctx, "Credits", nk_rect(window_width / 2 - 250, window_height / 2 - 150, 700, 300),
                          NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
                              NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE))
             {
 
                 nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.2", NK_TEXT_CENTERED);
-
+                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.3", NK_TEXT_CENTERED);
+                nk_label(ctx, "by @akioukun (github.com/akioukun)", NK_TEXT_CENTERED);
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "", NK_TEXT_LEFT);
-                nk_label(ctx, "made with nuklear, sdl2/opengl, portable-file-dialogs", NK_TEXT_LEFT);
-                nk_label(ctx, "SCT/SCT2 support with astcenc & etcdec", NK_TEXT_LEFT);
-                nk_label(ctx, "big thanks to @formagGino (github.com/formagGinoo) for SCTParser and DBParser", NK_TEXT_LEFT);
-                nk_label(ctx, "thanks to @LukeFZ (github.com/LukeFZ) for DB decryption logic", NK_TEXT_LEFT);
-                nk_label(ctx, "by @akioukun (github.com/akioukun)", NK_TEXT_LEFT);
+                nk_label(ctx, "made with nuklear, sdl2/opengl, portable-file-dialogs", NK_TEXT_CENTERED);
+                nk_label(ctx, "SCT/SCT2 support with astcenc & etcdec", NK_TEXT_CENTERED);
+                nk_label(ctx, "big thanks to @formagGino (github.com/formagGinoo) for SCT Parser, DB Parser and SCSP Parser", NK_TEXT_CENTERED);
+                nk_label(ctx, "thanks to @LukeFZ (github.com/LukeFZ) for DB decryption logic", NK_TEXT_CENTERED);
 
                 nk_layout_row_dynamic(ctx, 30, 1);
                 if (nk_button_label(ctx, "Close"))
@@ -1520,6 +1663,7 @@ int main(int argc, char *argv[])
             bool pack_loaded = (data_pack != nullptr);
             bool tree_scanned = pack_loaded && !std::get<Core::FolderInfo>(data_pack->GetFileTree().data).children.empty();
             bool selection_exists = (selected_node != nullptr);
+            bool has_file_selection = !selected_file_nodes.empty();
 
             nk_layout_row_dynamic(ctx, 38, 7);
 
@@ -1549,6 +1693,7 @@ int main(int argc, char *argv[])
 
                         data_pack.reset();
                         selected_node = nullptr;
+                        selected_file_nodes.clear();
                         expanded_folders.clear();
                         has_preview = false;
                         preview_error = "";
@@ -1595,6 +1740,7 @@ int main(int argc, char *argv[])
 
                     expanded_folders.clear();
                     selected_node = nullptr;
+                    selected_file_nodes.clear();
                     last_clicked_node = nullptr;
                     has_preview = false;
                     preview_error = "";
@@ -1664,7 +1810,7 @@ int main(int argc, char *argv[])
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && selection_exists && !is_task_running &&
+            if (tree_scanned && has_file_selection && !is_task_running &&
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected"))
             {
 
@@ -1676,15 +1822,32 @@ int main(int argc, char *argv[])
                         std::string dest_str = d.result();
                         std::wstring dest_path(dest_str.begin(), dest_str.end());
                         is_task_running = true;
-                        status_text = "Extracting...";
+                        std::vector<const Core::FileNode *> nodes_to_extract;
+                        nodes_to_extract.reserve(selected_file_nodes.size());
+                        for (const auto *n : selected_file_nodes)
+                        {
+                            if (n && std::holds_alternative<Core::FileInfo>(n->data))
+                                nodes_to_extract.push_back(n);
+                        }
+                        if (nodes_to_extract.empty() && selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data))
+                        {
+                            nodes_to_extract.push_back(selected_node);
+                        }
+
+                        status_text = "Extracting " + std::to_string(nodes_to_extract.size()) + " files...";
                         task_progress = 0.0f;
-                        const Core::FileNode *node_to_extract = selected_node;
                         bool convert_sct = export_sct_as_png;
                         bool convert_db = export_db_as_json;
-                        task_future = std::async(std::launch::async, [dest_path, node_to_extract, convert_sct, convert_db]()
+                        task_future = std::async(std::launch::async, [dest_path, nodes_to_extract, convert_sct, convert_db]()
                                                  {
                             try {
-                                data_pack->Extract(*node_to_extract, dest_path, task_progress, convert_sct, convert_db);
+                                const float total = nodes_to_extract.empty() ? 1.0f : (float)nodes_to_extract.size();
+                                for (size_t i = 0; i < nodes_to_extract.size(); i++)
+                                {
+                                    std::atomic<float> local_progress = 0.0f;
+                                    data_pack->Extract(*nodes_to_extract[i], dest_path, local_progress, convert_sct, convert_db);
+                                    task_progress = (float)(i + 1) / total;
+                                }
                             }
                             catch (...) {} });
                     }
@@ -1694,7 +1857,7 @@ int main(int argc, char *argv[])
                     status_text = "Error starting extraction: " + std::string(e.what());
                 }
             }
-            else if (!tree_scanned || !selection_exists || is_task_running)
+            else if (!tree_scanned || !has_file_selection || is_task_running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected");
@@ -2005,71 +2168,92 @@ int main(int argc, char *argv[])
                         nk_layout_row_dynamic(ctx, 25, 1);
                         nk_label(ctx, "JSON Viewer", NK_TEXT_CENTERED);
 
-                        nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
-
-                        // Show "Export as JSON" only if it was originally a DB file
                         bool is_db_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_db_file(std::get<Core::FileInfo>(selected_node->data).format);
-                        if (is_db_source)
+                        bool is_scsp_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_scsp_file(std::get<Core::FileInfo>(selected_node->data).format);
+
+                        if (is_scsp_source)
                         {
-                            nk_layout_row_push(ctx, 120);
+                            nk_layout_row_dynamic(ctx, 30, 1);
                             if (nk_button_label(ctx, "Export as JSON"))
                             {
-                                export_db_as_json_file(*selected_node);
+                                export_scsp_as_json_file(*selected_node);
                             }
                         }
                         else
                         {
-                            nk_layout_row_push(ctx, 120);
-                            nk_label(ctx, "", NK_TEXT_LEFT);
-                        }
+                            nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
 
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Copy All"))
-                        {
-                            SDL_SetClipboardText(preview_json_data.c_str());
-                        }
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Save As..."))
-                        {
-                            try
+                            if (is_db_source)
                             {
-                                std::string default_name = selected_node ? selected_node->name : "output";
-                                size_t dot_pos = default_name.find_last_of('.');
-                                if (dot_pos != std::string::npos)
+                                nk_layout_row_push(ctx, 120);
+                                if (nk_button_label(ctx, "Export as JSON"))
                                 {
-                                    default_name = default_name.substr(0, dot_pos);
+                                    export_db_as_json_file(*selected_node);
                                 }
-                                default_name += ".json";
+                            }
+                            else
+                            {
+                                nk_layout_row_push(ctx, 120);
+                                nk_label(ctx, "", NK_TEXT_LEFT);
+                            }
 
-                                auto f = pfd::save_file("Save JSON", default_name,
-                                                        {"JSON Files", "*.json", "All Files", "*.*"});
-
-                                if (!f.result().empty())
+                            nk_layout_row_push(ctx, 120);
+                            if (nk_button_label(ctx, "Copy All"))
+                            {
+                                SDL_SetClipboardText(preview_json_data.c_str());
+                            }
+                            nk_layout_row_push(ctx, 120);
+                            if (nk_button_label(ctx, "Save As..."))
+                            {
+                                try
                                 {
-                                    std::ofstream out(f.result());
-                                    if (out.is_open())
+                                    std::string default_name = selected_node ? selected_node->name : "output";
+                                    size_t dot_pos = default_name.find_last_of('.');
+                                    if (dot_pos != std::string::npos)
                                     {
-                                        out << preview_json_data;
-                                        out.close();
-                                        status_text = "Saved to: " + f.result();
+                                        default_name = default_name.substr(0, dot_pos);
+                                    }
+                                    default_name += ".json";
+
+                                    auto f = pfd::save_file("Save JSON", default_name,
+                                                            {"JSON Files", "*.json", "All Files", "*.*"});
+
+                                    if (!f.result().empty())
+                                    {
+                                        std::ofstream out(f.result());
+                                        if (out.is_open())
+                                        {
+                                            out << preview_json_data;
+                                            out.close();
+                                            status_text = "Saved to: " + f.result();
+                                        }
                                     }
                                 }
+                                catch (...)
+                                {
+                                }
                             }
-                            catch (...)
-                            {
-                            }
+                            nk_layout_row_end(ctx);
                         }
-                        nk_layout_row_end(ctx);
 
                         nk_layout_row_dynamic(ctx, content_height - 100, 1);
                         if (nk_group_begin(ctx, "JsonPreview", NK_WINDOW_BORDER))
                         {
                             std::stringstream ss(preview_json_data);
                             std::string line;
+                            int line_count = 0;
                             while (std::getline(ss, line))
                             {
+                                if (is_scsp_source && line_count > 500)
+                                {
+                                    nk_layout_row_dynamic(ctx, 20, 1);
+                                    nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
+                                    break;
+                                }
+
                                 nk_layout_row_dynamic(ctx, 20, 1);
                                 nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
+                                line_count++;
                             }
                             nk_group_end(ctx);
                         }
@@ -2097,15 +2281,36 @@ int main(int argc, char *argv[])
                                 {
                                     default_name = default_name.substr(0, dot_pos);
                                 }
-                                default_name += ".txt";
 
-                                auto f = pfd::save_file("Save Text", default_name,
-                                                        {"Text", "*.txt", "All Files", "*.*"});
+                                std::string data_to_save = full_atlas_data.empty() ? preview_atlas_data : full_atlas_data;
+                                bool is_atlas = data_to_save.find("format: ") != std::string::npos &&
+                                                data_to_save.find("filter: ") != std::string::npos;
+
+                                if (is_atlas)
+                                {
+                                    default_name += ".atlas";
+
+                                    // replace .sct with .png in the atlas content
+                                    // this so user dont have to do it manually
+                                    size_t pos = 0;
+                                    while ((pos = data_to_save.find(".sct", pos)) != std::string::npos)
+                                    {
+                                        data_to_save.replace(pos, 4, ".png");
+                                        pos += 4;
+                                    }
+                                }
+                                else
+                                {
+                                    default_name += ".txt";
+                                }
+
+                                auto f = pfd::save_file(is_atlas ? "Save Atlas" : "Save Text", default_name,
+                                                        is_atlas ? std::vector<std::string>{"Atlas Files", "*.atlas", "Text Files", "*.txt", "All Files", "*.*"}
+                                                                 : std::vector<std::string>{"Text Files", "*.txt", "All Files", "*.*"});
 
                                 if (!f.result().empty())
                                 {
-                                    const std::string &data_to_save = full_atlas_data.empty() ? preview_atlas_data : full_atlas_data;
-                                    std::ofstream out(f.result());
+                                    std::ofstream out(f.result(), std::ios::binary);
                                     if (out.is_open())
                                     {
                                         out << data_to_save;
@@ -2127,6 +2332,9 @@ int main(int argc, char *argv[])
                             std::string line;
                             while (std::getline(ss, line))
                             {
+                                if (!line.empty() && line.back() == '\r')
+                                    line.pop_back();
+
                                 nk_layout_row_dynamic(ctx, 20, 1);
                                 nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
                             }

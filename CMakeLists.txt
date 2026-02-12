@@ -24,6 +24,7 @@ add_executable(
     DataPack.cpp
     SCTParser.cpp
     DBParser.cpp
+    SCSPParser.cpp
 )
 
 if(WIN32)

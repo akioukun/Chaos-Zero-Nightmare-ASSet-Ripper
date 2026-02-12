@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include "DBParser.h"
+#include "SCSPParser.h"
 #include "Logger.h"
 DataPack::DataPack(const std::wstring& path) : pack_path_(path), type_(PackType::Unknown) {
     root_node_.name = "root";
@@ -326,6 +327,8 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
             std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
             bool is_sct = (ext_lower == ".sct" || ext_lower == ".sct2");
             bool is_db = (ext_lower == ".db");
+            bool is_scsp = (ext_lower == ".scsp");
+            bool is_atlas = (ext_lower == ".atlas");
 
 
             if (is_sct && convert_sct_to_png) {
@@ -333,6 +336,10 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
             }
 
             if (is_db && convert_db_to_json) {
+                final_path.replace_extension(".json");
+            }
+
+            if (is_scsp && convert_db_to_json) {
                 final_path.replace_extension(".json");
             }
 
@@ -351,6 +358,29 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
                         }
                     } catch (const std::exception& e) {
                         LogError(std::string("SCT conversion failed for ") + node.name + ": " + e.what());
+                    }
+                }
+
+                if (is_atlas && convert_sct_to_png) {
+                    try {
+                        LogInfo(std::string("Rewriting atlas texture refs: ") + node.name);
+                        std::string atlas_text(buffer.begin(), buffer.end());
+
+                        size_t pos = 0;
+                        while ((pos = atlas_text.find(".sct2", pos)) != std::string::npos) {
+                            atlas_text.replace(pos, 5, ".png");
+                            pos += 4;
+                        }
+
+                        pos = 0;
+                        while ((pos = atlas_text.find(".sct", pos)) != std::string::npos) {
+                            atlas_text.replace(pos, 4, ".png");
+                            pos += 4;
+                        }
+
+                        buffer.assign(atlas_text.begin(), atlas_text.end());
+                    } catch (const std::exception& e) {
+                        LogError(std::string("Atlas rewrite failed for ") + node.name + ": " + e.what());
                     }
                 }
 
@@ -373,6 +403,24 @@ void DataPack::ExtractNode(const Core::FileNode& node, const std::wstring& curre
                         buffer.clear();
                     } catch (const std::exception& e) {
                         LogError(std::string("DB conversion exception for ") + node.name + ": " + e.what());
+                    }
+                }
+
+                if (is_scsp && convert_db_to_json) {
+                    try {
+                        LogInfo(std::string("Converting SCSP to JSON: ") + node.name);
+                        std::string json = SCSPParser::ConvertSCSPToJson(buffer);
+
+                        std::ofstream out(final_path);
+                        if (out.is_open()) {
+                            out << json;
+                            out.close();
+                        } else {
+                            LogError(std::string("Failed to open output for SCSP JSON: ") + final_path.string());
+                        }
+                        buffer.clear();
+                    } catch (const std::exception& e) {
+                        LogError(std::string("SCSP conversion exception for ") + node.name + ": " + e.what());
                     }
                 }
 
