@@ -995,52 +995,55 @@ void handle_node_click(const Core::FileNode *node, bool is_folder)
 
     click_count = 0;
 
-    if (!is_folder)
+    if (ctrl_pressed)
     {
-        if (ctrl_pressed)
+        if (selected_file_nodes.find(node) != selected_file_nodes.end())
         {
-            if (selected_file_nodes.find(node) != selected_file_nodes.end())
-            {
-                selected_file_nodes.erase(node);
-            }
-            else
-            {
-                selected_file_nodes.insert(node);
-            }
-            selected_node = node;
+            selected_file_nodes.erase(node);
+        }
+        else
+        {
+            selected_file_nodes.insert(node);
+        }
+
+        selected_node = node;
+        if (!is_folder)
+        {
             load_image_preview(*node);
         }
         else
         {
-            selected_file_nodes.clear();
-            selected_file_nodes.insert(node);
-            if (selected_node != node)
-            {
-                selected_node = node;
-                load_image_preview(*node);
-            }
-            else
-            {
-                selected_node = node;
-            }
+            has_preview = false;
+            preview_error = "";
+            preview_atlas_data = "";
+            preview_json_data = "";
+            full_atlas_data = "";
+            db_column_names.clear();
+            db_rows.clear();
+            current_preview_mode = PreviewMode::None;
         }
     }
     else
     {
-        if (!ctrl_pressed)
+        selected_file_nodes.clear();
+        selected_file_nodes.insert(node);
+        selected_node = node;
+
+        if (!is_folder)
         {
-            selected_file_nodes.clear();
+            load_image_preview(*node);
         }
-        if (selected_node != node)
-            selected_node = node;
-        has_preview = false;
-        preview_error = "";
-        preview_atlas_data = "";
-        preview_json_data = "";
-        full_atlas_data = "";
-        db_column_names.clear();
-        db_rows.clear();
-        current_preview_mode = PreviewMode::None;
+        else
+        {
+            has_preview = false;
+            preview_error = "";
+            preview_atlas_data = "";
+            preview_json_data = "";
+            full_atlas_data = "";
+            db_column_names.clear();
+            db_rows.clear();
+            current_preview_mode = PreviewMode::None;
+        }
     }
 
     last_click_time = current_time;
@@ -1126,7 +1129,7 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
         {
             const auto &folder = std::get<Core::FolderInfo>(node.data);
             bool is_expanded = expanded_folders.find(&node) != expanded_folders.end();
-            bool is_selected = (selected_node == &node);
+            bool is_selected = (selected_file_nodes.find(&node) != selected_file_nodes.end()) || (selected_node == &node);
 
             struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
             if (is_selected)
@@ -1664,6 +1667,7 @@ int main(int argc, char *argv[])
             bool tree_scanned = pack_loaded && !std::get<Core::FolderInfo>(data_pack->GetFileTree().data).children.empty();
             bool selection_exists = (selected_node != nullptr);
             bool has_file_selection = !selected_file_nodes.empty();
+            bool has_extract_selection = has_file_selection || (selected_node != nullptr);
 
             nk_layout_row_dynamic(ctx, 38, 7);
 
@@ -1810,7 +1814,7 @@ int main(int argc, char *argv[])
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && has_file_selection && !is_task_running &&
+            if (tree_scanned && has_extract_selection && !is_task_running &&
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected"))
             {
 
@@ -1823,18 +1827,18 @@ int main(int argc, char *argv[])
                         std::wstring dest_path(dest_str.begin(), dest_str.end());
                         is_task_running = true;
                         std::vector<const Core::FileNode *> nodes_to_extract;
-                        nodes_to_extract.reserve(selected_file_nodes.size());
+                        nodes_to_extract.reserve(selected_file_nodes.size() + 1);
                         for (const auto *n : selected_file_nodes)
                         {
-                            if (n && std::holds_alternative<Core::FileInfo>(n->data))
+                            if (n)
                                 nodes_to_extract.push_back(n);
                         }
-                        if (nodes_to_extract.empty() && selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data))
+                        if (nodes_to_extract.empty() && selected_node)
                         {
                             nodes_to_extract.push_back(selected_node);
                         }
 
-                        status_text = "Extracting " + std::to_string(nodes_to_extract.size()) + " files...";
+                        status_text = "Extracting " + std::to_string(nodes_to_extract.size()) + " item(s)...";
                         task_progress = 0.0f;
                         bool convert_sct = export_sct_as_png;
                         bool convert_db = export_db_as_json;
@@ -1857,7 +1861,7 @@ int main(int argc, char *argv[])
                     status_text = "Error starting extraction: " + std::string(e.what());
                 }
             }
-            else if (!tree_scanned || !has_file_selection || is_task_running)
+            else if (!tree_scanned || !has_extract_selection || is_task_running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected");
