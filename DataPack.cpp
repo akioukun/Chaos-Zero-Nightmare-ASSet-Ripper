@@ -5,9 +5,56 @@
 #include <iostream>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include "DBParser.h"
 #include "SCSPParser.h"
 #include "Logger.h"
+
+namespace {
+    uint32_t read_u32_le(const uint8_t* p) {
+        return static_cast<uint32_t>(p[0]) |
+               (static_cast<uint32_t>(p[1]) << 8) |
+               (static_cast<uint32_t>(p[2]) << 16) |
+               (static_cast<uint32_t>(p[3]) << 24);
+    }
+
+    std::string sanitize_pack_path(const std::string& raw) {
+        // Trim trailing NUL bytes and normalize separators for stable tree building.
+        size_t end = raw.find('\0');
+        std::string path = (end == std::string::npos) ? raw : raw.substr(0, end);
+        std::replace(path.begin(), path.end(), '\\', '/');
+        while (!path.empty() && path.back() == '/') path.pop_back();
+        while (!path.empty() && path.front() == '/') path.erase(path.begin());
+        return path;
+    }
+
+    bool is_likely_pack_path(const std::string& path) {
+        if (path.size() < 3 || path.size() > 2048) return false;
+        if (path.find('\0') != std::string::npos) return false;
+        bool has_file_like_suffix = false;
+        for (unsigned char c : path) {
+            if (c < 0x20 && c != '\t') return false;
+            if (c == '.' || c == '/' || c == '\\') has_file_like_suffix = true;
+        }
+        return has_file_like_suffix;
+    }
+
+    std::vector<std::string> split_path_parts(const std::string& path) {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (start < path.size()) {
+            size_t slash = path.find('/', start);
+            size_t end = (slash == std::string::npos) ? path.size() : slash;
+            if (end > start) {
+                parts.push_back(path.substr(start, end - start));
+            }
+            if (slash == std::string::npos) break;
+            start = slash + 1;
+        }
+        return parts;
+    }
+}
+
 DataPack::DataPack(const std::wstring& path) : pack_path_(path), type_(PackType::Unknown) {
     root_node_.name = "root";
     root_node_.data = Core::FolderInfo{};
@@ -160,13 +207,13 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
             memcpy(header_buffer, &mapped_data_[header_offset], 15);
             Core::xor_buffer(header_buffer, 15, header_offset);
 
-            uint32_t container_len = *(uint32_t*)&header_buffer[0];
+            uint32_t container_len = read_u32_le(&header_buffer[0]);
             uint8_t path_len = header_buffer[5];
-            uint32_t data_len = *(uint32_t*)&header_buffer[6];
+            uint32_t data_len = read_u32_le(&header_buffer[6]);
 
         if (container_len > file_size_ || 
             path_len == 0 || 
-            path_len > 1024 || 
+            path_len > 255 || 
             data_len > file_size_ ||
             container_len != path_len + data_len + 19) {
             cursor++;
@@ -181,7 +228,11 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
                 std::vector<uint8_t> path_buffer(path_len);
                 memcpy(path_buffer.data(), &mapped_data_[header_offset + 15], path_len);
                 Core::xor_buffer(path_buffer.data(), path_len, header_offset + 15);
-                std::string path_str((char*)path_buffer.data(), path_len);
+                std::string path_str = sanitize_pack_path(std::string((char*)path_buffer.data(), path_len));
+                if (!is_likely_pack_path(path_str)) {
+                    cursor++;
+                    continue;
+                }
 
                 uint64_t file_offset = header_offset + 15 + path_len;
 
@@ -213,11 +264,11 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
             continue;
         }
 
-        uint32_t container_len = *(uint32_t*)&mapped_data_[header_offset];
+        uint32_t container_len = read_u32_le(&mapped_data_[header_offset]);
         uint8_t path_len = mapped_data_[header_offset + 5];
-        uint32_t data_len = *(uint32_t*)&mapped_data_[header_offset + 6];
+        uint32_t data_len = read_u32_le(&mapped_data_[header_offset + 6]);
 
-        if (container_len > file_size_ || path_len == 0 || path_len > 1024 || data_len > file_size_) {
+        if (container_len > file_size_ || path_len == 0 || path_len > 255 || data_len > file_size_) {
             cursor++;
             continue;
         }
@@ -228,7 +279,11 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
                 continue;
             }
 
-            std::string path_str((char*)&mapped_data_[header_offset + 15], path_len);
+            std::string path_str = sanitize_pack_path(std::string((char*)&mapped_data_[header_offset + 15], path_len));
+            if (!is_likely_pack_path(path_str)) {
+                cursor++;
+                continue;
+            }
             uint64_t file_offset = header_offset + 15 + path_len;
 
             if (file_offset + data_len <= file_size_) {
@@ -247,20 +302,26 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
 
 void DataPack::AddFileToTree(const std::string& path, uint64_t offset, uint64_t size) {
     try {
-        std::filesystem::path p(path);
+        std::string clean_path = sanitize_pack_path(path);
+        if (clean_path.empty()) return;
+
+        std::vector<std::string> parts = split_path_parts(clean_path);
+        if (parts.empty()) return;
+
         auto* current_folder_info = &std::get<Core::FolderInfo>(root_node_.data);
         std::string current_path = "";
 
-        for (const auto& part : p.parent_path()) {
-            if (part.empty() || part.string() == "/") continue;
-            current_path += part.string() + "/";
+        for (size_t i = 0; i + 1 < parts.size(); ++i) {
+            const std::string& part = parts[i];
+            if (part.empty() || part == ".") continue;
+            current_path += part + "/";
 
             auto it = std::find_if(current_folder_info->children.begin(), current_folder_info->children.end(),
-                [&](const Core::FileNode& n) { return n.name == part.string(); });
+                [&](const Core::FileNode& n) { return n.name == part; });
 
             if (it == current_folder_info->children.end()) {
                 Core::FileNode new_folder;
-                new_folder.name = part.string();
+                new_folder.name = part;
                 new_folder.full_path = current_path;
                 new_folder.data = Core::FolderInfo{};
                 current_folder_info->children.push_back(new_folder);
@@ -273,9 +334,15 @@ void DataPack::AddFileToTree(const std::string& path, uint64_t offset, uint64_t 
             }
         }
         Core::FileNode file_node;
-        file_node.name = p.filename().string();
-        file_node.full_path = path;
-        file_node.data = Core::FileInfo{ offset, size, p.extension().string() };
+        file_node.name = parts.back();
+        file_node.full_path = clean_path;
+
+        std::string extension;
+        size_t dot = file_node.name.find_last_of('.');
+        if (dot != std::string::npos && dot + 1 < file_node.name.size()) {
+            extension = file_node.name.substr(dot);
+        }
+        file_node.data = Core::FileInfo{ offset, size, extension };
         current_folder_info->children.push_back(std::move(file_node));
     }
     catch (const std::exception& e) {
