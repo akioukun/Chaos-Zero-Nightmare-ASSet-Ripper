@@ -55,53 +55,123 @@ namespace {
     }
 }
 
+std::vector<std::wstring> DataPack::FindPackParts(const std::wstring& basePath) {
+    std::vector<std::wstring> parts;
+    parts.push_back(basePath);
+
+    // find all the parts
+    for (int i = 1; i < 1000; ++i) {
+        std::wstring partPath = basePath + L"~" + std::to_wstring(i);
+        HANDLE hTest = CreateFileW(partPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hTest == INVALID_HANDLE_VALUE) {
+            break;
+        }
+        CloseHandle(hTest);
+        parts.push_back(partPath);
+    }
+
+    return parts;
+}
+
+bool DataPack::LoadPackPart(const std::wstring& path, size_t partIndex) {
+    PackPart part;
+    
+    part.hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (part.hFile == INVALID_HANDLE_VALUE) {
+        std::wcerr << L"Failed to open file: " << path << std::endl;
+        return false;
+    }
+
+    LARGE_INTEGER fs;
+    if (!GetFileSizeEx(part.hFile, &fs)) {
+        std::wcerr << L"Failed to get file size for: " << path << std::endl;
+        CloseHandle(part.hFile);
+        return false;
+    }
+    part.size = fs.QuadPart;
+
+    part.hMapFile = CreateFileMapping(part.hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (part.hMapFile == NULL) {
+        std::wcerr << L"Failed to create file mapping for: " << path << std::endl;
+        CloseHandle(part.hFile);
+        return false;
+    }
+
+    part.mapped_data = (const uint8_t*)MapViewOfFile(part.hMapFile, FILE_MAP_READ, 0, 0, 0);
+    if (part.mapped_data == nullptr) {
+        std::wcerr << L"Failed to map view of file: " << path << std::endl;
+        CloseHandle(part.hMapFile);
+        CloseHandle(part.hFile);
+        return false;
+    }
+
+    parts_.push_back(part);
+    total_file_size_ += part.size;
+    return true;
+}
+
+const uint8_t* DataPack::GetDataAtOffset(uint64_t offset, size_t& outSize) {
+    if (parts_.empty()) return nullptr;
+
+    // Find which part contains this offset
+    uint64_t currentPos = 0;
+    for (const auto& part : parts_) {
+        if (offset < currentPos + part.size) {
+            uint64_t localOffset = offset - currentPos;
+            outSize = static_cast<size_t>(part.size - localOffset);
+            return part.mapped_data + localOffset;
+        }
+        currentPos += part.size;
+    }
+
+    return nullptr;
+}
+
 DataPack::DataPack(const std::wstring& path) : pack_path_(path), type_(PackType::Unknown) {
     root_node_.name = "root";
     root_node_.data = Core::FolderInfo{};
 
-    hFile_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile_ == INVALID_HANDLE_VALUE) {
-        std::wcerr << L"Failed to open file: " << path << std::endl;
+    auto packParts = FindPackParts(path);
+    if (packParts.empty()) {
+        std::wcerr << L"No pack files found: " << path << std::endl;
         return;
     }
 
-    LARGE_INTEGER fs;
-    if (!GetFileSizeEx(hFile_, &fs)) {
-        std::wcerr << L"Failed to get file size for: " << path << std::endl;
-        CloseHandle(hFile_);
-        hFile_ = INVALID_HANDLE_VALUE;
-        return;
+    // load all parts
+    for (size_t i = 0; i < packParts.size(); ++i) {
+        if (!LoadPackPart(packParts[i], i)) {
+            std::wcerr << L"Failed to load pack part: " << packParts[i] << std::endl;
+            // continue
+        }
     }
-    file_size_ = fs.QuadPart;
 
-    hMapFile_ = CreateFileMapping(hFile_, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (hMapFile_ == NULL) {
-        std::wcerr << L"Failed to create file mapping for: " << path << std::endl;
-        CloseHandle(hFile_);
-        hFile_ = INVALID_HANDLE_VALUE;
+    if (parts_.empty()) {
+        std::wcerr << L"Failed to load any pack parts from: " << path << std::endl;
         return;
     }
 
-    mapped_data_ = (const uint8_t*)MapViewOfFile(hMapFile_, FILE_MAP_READ, 0, 0, 0);
-    if (mapped_data_ == nullptr) {
-        std::wcerr << L"Failed to map view of file: " << path << std::endl;
-        return;
-    }
-
-    if (file_size_ < 5) {
+    if (total_file_size_ < 5) {
         type_ = PackType::Unknown;
         return;
     }
 
-    if (memcmp(mapped_data_, "\x71\x40\xBD\x73\x93", 5) == 0) type_ = PackType::Encrypted;
-    else if (memcmp(mapped_data_, "\x50\x4C\x50\x63\x4B", 5) == 0) type_ = PackType::Decrypted;
-    else type_ = PackType::Unknown;
+    // check file type from first part
+    size_t headerSize = 0;
+    const uint8_t* headerData = GetDataAtOffset(0, headerSize);
+    if (headerData && headerSize >= 5) {
+        if (memcmp(headerData, "\x71\x40\xBD\x73\x93", 5) == 0) type_ = PackType::Encrypted;
+        else if (memcmp(headerData, "\x50\x4C\x50\x63\x4B", 5) == 0) type_ = PackType::Decrypted;
+        else type_ = PackType::Unknown;
+    }
 }
 
 DataPack::~DataPack() {
-    if (mapped_data_) UnmapViewOfFile(mapped_data_);
-    if (hMapFile_) CloseHandle(hMapFile_);
-    if (hFile_ != INVALID_HANDLE_VALUE) CloseHandle(hFile_);
+    for (auto& part : parts_) {
+        if (part.mapped_data) UnmapViewOfFile(part.mapped_data);
+        if (part.hMapFile) CloseHandle(part.hMapFile);
+        if (part.hFile != INVALID_HANDLE_VALUE) CloseHandle(part.hFile);
+    }
+    parts_.clear();
 }
 
 std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode& node) {
@@ -112,15 +182,36 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode& node) {
     const auto& info = std::get<Core::FileInfo>(node.data);
 
     uint64_t file_end = static_cast<uint64_t>(info.offset) + static_cast<uint64_t>(info.size);
-    if (static_cast<uint64_t>(info.offset) >= static_cast<uint64_t>(file_size_) ||
-        file_end > static_cast<uint64_t>(file_size_)) {
+    if (static_cast<uint64_t>(info.offset) >= total_file_size_ ||
+        file_end > total_file_size_) {
         std::cerr << "Invalid file offset/size for: " << node.name << std::endl;
         return data;
     }
 
     try {
         data.resize(info.size);
-        memcpy(data.data(), mapped_data_ + info.offset, info.size);
+        
+        // handle reading across multiple parts
+        uint64_t bytesRead = 0;
+        uint64_t currentOffset = info.offset;
+        
+        while (bytesRead < info.size) {
+            size_t availableInPart = 0;
+            const uint8_t* sourcePtr = GetDataAtOffset(currentOffset, availableInPart);
+            
+            if (!sourcePtr || availableInPart == 0) {
+                std::cerr << "Failed to read file data at offset: " << currentOffset << std::endl;
+                data.clear();
+                return data;
+            }
+            
+            size_t remaining = info.size - bytesRead;
+            size_t toRead = (availableInPart < remaining) ? availableInPart : remaining;
+            memcpy(data.data() + bytesRead, sourcePtr, toRead);
+            
+            bytesRead += toRead;
+            currentOffset += toRead;
+        }
 
         if (type_ == PackType::Encrypted) {
             Core::xor_buffer(data.data(), info.size, info.offset);
@@ -179,12 +270,12 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
         key[i] = (current >> 16) & 0xFF;
     }
 
-    while (cursor < file_size_) {
+    while (cursor < total_file_size_) {
         if ((cursor & 0xFFFF) == 0) {
-            progress = (float)cursor / file_size_;
+            progress = (float)cursor / total_file_size_;
         }
         
-        if (cursor + 15 > file_size_) break;  
+        if (cursor + 15 > total_file_size_) break;  
         
         if (cursor < 4) {
             cursor++;
@@ -193,64 +284,106 @@ void DataPack::ScanEncrypted(std::atomic<float>& progress) {
 
         size_t header_offset = cursor - 4;
         
-        if ((mapped_data_[cursor] ^ key[cursor % Core::KEY_SIZE]) != 0x02) {
+        size_t availableSize = 0;
+        const uint8_t* headerPtr = GetDataAtOffset(cursor, availableSize);
+        if (!headerPtr || availableSize == 0) {
             cursor++;
             continue;
         }
 
+        if (((*headerPtr) ^ key[cursor % Core::KEY_SIZE]) != 0x02) {
+            cursor++;
+            continue;
+        }
 
-            if (header_offset + 15 > file_size_) {
+        if (header_offset + 15 > total_file_size_) {
+            cursor++;
+            continue;
+        }
+
+        // read header (may span multiple parts)
+        uint64_t pos = header_offset;
+        for (int i = 0; i < 15; ++i) {
+            size_t avail = 0;
+            const uint8_t* ptr = GetDataAtOffset(pos + i, avail);
+            if (!ptr || avail == 0) {
                 cursor++;
-                continue;
+                goto next_iter;
             }
+            header_buffer[i] = *ptr;
+        }
 
-            memcpy(header_buffer, &mapped_data_[header_offset], 15);
-            Core::xor_buffer(header_buffer, 15, header_offset);
+        Core::xor_buffer(header_buffer, 15, header_offset);
 
+        {
             uint32_t container_len = read_u32_le(&header_buffer[0]);
             uint8_t path_len = header_buffer[5];
             uint32_t data_len = read_u32_le(&header_buffer[6]);
 
-        if (container_len > file_size_ || 
-            path_len == 0 || 
-            path_len > 255 || 
-            data_len > file_size_ ||
-            container_len != path_len + data_len + 19) {
-            cursor++;
-            continue;
-        }
+            if (container_len > total_file_size_ || 
+                path_len == 0 || 
+                path_len > 255 || 
+                data_len > total_file_size_ ||
+                container_len != path_len + data_len + 19) {
+                cursor++;
+                continue;
+            }
 
-        if (header_offset + 15 + path_len + data_len > file_size_) {
-            cursor++;
-            continue;
-        }
+            if (header_offset + 15 + path_len + data_len > total_file_size_) {
+                cursor++;
+                continue;
+            }
 
-                std::vector<uint8_t> path_buffer(path_len);
-                memcpy(path_buffer.data(), &mapped_data_[header_offset + 15], path_len);
-                Core::xor_buffer(path_buffer.data(), path_len, header_offset + 15);
-                std::string path_str = sanitize_pack_path(std::string((char*)path_buffer.data(), path_len));
-                if (!is_likely_pack_path(path_str)) {
+            std::vector<uint8_t> path_buffer(path_len);
+            for (int i = 0; i < path_len; ++i) {
+                size_t avail = 0;
+                const uint8_t* ptr = GetDataAtOffset(header_offset + 15 + i, avail);
+                if (!ptr || avail == 0) {
                     cursor++;
-                    continue;
+                    goto next_iter;
                 }
+                path_buffer[i] = *ptr;
+            }
+            Core::xor_buffer(path_buffer.data(), path_len, header_offset + 15);
+            std::string path_str = sanitize_pack_path(std::string((char*)path_buffer.data(), path_len));
+            if (!is_likely_pack_path(path_str)) {
+                cursor++;
+                continue;
+            }
 
-                uint64_t file_offset = header_offset + 15 + path_len;
+            uint64_t file_offset = header_offset + 15 + path_len;
 
-        AddFileToTree(path_str, static_cast<uint64_t>(file_offset), static_cast<uint64_t>(data_len));
-        
-        cursor = header_offset + 4 + container_len;
+            AddFileToTree(path_str, static_cast<uint64_t>(file_offset), static_cast<uint64_t>(data_len));
+            cursor = header_offset + 4 + container_len;
+        }
+
+        next_iter:;
     }
 }
 
 void DataPack::ScanDecrypted(std::atomic<float>& progress) {
     size_t cursor = 0;
-    while (cursor < file_size_) {
-        progress = (float)cursor / file_size_;
+    while (cursor < total_file_size_) {
+        progress = (float)cursor / total_file_size_;
 
-        const void* found = memchr(&mapped_data_[cursor], 0x02, file_size_ - cursor);
+        // search for 0x02 byte
+        bool found = false;
+        while (cursor < total_file_size_) {
+            size_t availableSize = 0;
+            const uint8_t* ptr = GetDataAtOffset(cursor, availableSize);
+            if (!ptr || availableSize == 0) {
+                cursor++;
+                continue;
+            }
+
+            if (*ptr == 0x02) {
+                found = true;
+                break;
+            }
+            cursor++;
+        }
+
         if (!found) break;
-
-        cursor = (const uint8_t*)found - mapped_data_;
 
         if (cursor < 4) {
             cursor++;
@@ -259,44 +392,71 @@ void DataPack::ScanDecrypted(std::atomic<float>& progress) {
 
         size_t header_offset = cursor - 4;
 
-        if (header_offset + 15 > file_size_) {
+        if (header_offset + 15 > total_file_size_) {
             cursor++;
             continue;
         }
 
-        uint32_t container_len = read_u32_le(&mapped_data_[header_offset]);
-        uint8_t path_len = mapped_data_[header_offset + 5];
-        uint32_t data_len = read_u32_le(&mapped_data_[header_offset + 6]);
-
-        if (container_len > file_size_ || path_len == 0 || path_len > 255 || data_len > file_size_) {
-            cursor++;
-            continue;
+        uint8_t header_buffer[15];
+        uint64_t pos = header_offset;
+        for (int i = 0; i < 15; ++i) {
+            size_t avail = 0;
+            const uint8_t* ptr = GetDataAtOffset(pos + i, avail);
+            if (!ptr || avail == 0) {
+                cursor++;
+                goto next_iter_dec;
+            }
+            header_buffer[i] = *ptr;
         }
 
-        if (container_len == path_len + data_len + 19) {
-            if (header_offset + 15 + path_len > file_size_) {
+        {
+            uint32_t container_len = read_u32_le(&header_buffer[0]);
+            uint8_t path_len = header_buffer[5];
+            uint32_t data_len = read_u32_le(&header_buffer[6]);
+
+            if (container_len > total_file_size_ || path_len == 0 || path_len > 255 || data_len > total_file_size_) {
                 cursor++;
                 continue;
             }
 
-            std::string path_str = sanitize_pack_path(std::string((char*)&mapped_data_[header_offset + 15], path_len));
-            if (!is_likely_pack_path(path_str)) {
-                cursor++;
-                continue;
-            }
-            uint64_t file_offset = header_offset + 15 + path_len;
+            if (container_len == path_len + data_len + 19) {
+                if (header_offset + 15 + path_len > total_file_size_) {
+                    cursor++;
+                    continue;
+                }
 
-            if (file_offset + data_len <= file_size_) {
-                AddFileToTree(path_str, static_cast<uint64_t>(file_offset), static_cast<uint64_t>(data_len));
-                cursor = file_offset + data_len;
+                std::vector<uint8_t> path_buffer(path_len);
+                for (int i = 0; i < path_len; ++i) {
+                    size_t avail = 0;
+                    const uint8_t* ptr = GetDataAtOffset(header_offset + 15 + i, avail);
+                    if (!ptr || avail == 0) {
+                        cursor++;
+                        goto next_iter_dec;
+                    }
+                    path_buffer[i] = *ptr;
+                }
+
+                std::string path_str = sanitize_pack_path(std::string((char*)path_buffer.data(), path_len));
+                if (!is_likely_pack_path(path_str)) {
+                    cursor++;
+                    continue;
+                }
+                uint64_t file_offset = header_offset + 15 + path_len;
+
+                if (file_offset + data_len <= total_file_size_) {
+                    AddFileToTree(path_str, static_cast<uint64_t>(file_offset), static_cast<uint64_t>(data_len));
+                    cursor = file_offset + data_len;
+                }
+                else {
+                    cursor++;
+                }
             }
             else {
                 cursor++;
             }
         }
-        else {
-            cursor++;
-        }
+
+        next_iter_dec:;
     }
 }
 

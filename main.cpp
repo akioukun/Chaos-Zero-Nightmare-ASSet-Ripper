@@ -99,9 +99,9 @@ static bool show_context_menu = false;
 static const Core::FileNode *context_menu_node = nullptr;
 static struct nk_vec2 context_menu_pos = {0, 0};
 static bool show_export_options_window = false;
-static bool export_sct_as_png = true;
+static nk_bool export_sct_as_png = nk_true;
 static bool export_convert_all_sct = false;
-static bool export_db_as_json = true;
+static nk_bool export_db_as_json = nk_true;
 
 static std::string wstring_to_utf8(const std::wstring &w)
 {
@@ -1269,7 +1269,7 @@ int main(int argc, char *argv[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window *win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.3",
+    SDL_Window *win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.3.1",
                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
                                        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -1511,15 +1511,44 @@ int main(int argc, char *argv[])
 
         if (show_export_options_window)
         {
-            if (nk_begin(ctx, "Export Options", nk_rect(window_width / 2 - 200, window_height / 2 - 120, 400, 280),
+            const float export_options_width = 530.0f;
+            const float export_options_height = 380.0f;
+            const float export_options_x = (window_width - export_options_width) * 0.5f;
+            const float export_options_y = (window_height - export_options_height) * 0.5f;
+            if (nk_begin(ctx, "Export Options", nk_rect(export_options_x, export_options_y, export_options_width, export_options_height),
                          NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE))
             {
 
                 nk_layout_row_dynamic(ctx, 25, 1);
                 nk_label(ctx, "Configure extraction options:", NK_TEXT_LEFT);
 
-                nk_layout_row_dynamic(ctx, 30, 1);
-                nk_checkbox_label(ctx, "Convert SCT files to PNG", (nk_bool *)&export_sct_as_png);
+                nk_layout_row_begin(ctx, NK_STATIC, 32, 2);
+                nk_layout_row_push(ctx, 380);
+                nk_label(ctx, "Convert SCT files to PNG", NK_TEXT_LEFT);
+                nk_layout_row_push(ctx, 120);
+                {
+                    struct nk_style_button toggle_style = ctx->style.button;
+                    if (export_sct_as_png)
+                    {
+                        toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
+                        toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
+                        toggle_style.active = nk_style_item_color(nk_rgb(50, 108, 66));
+                    }
+                    else
+                    {
+                        toggle_style.normal = nk_style_item_color(nk_rgb(100, 64, 64));
+                        toggle_style.hover = nk_style_item_color(nk_rgb(120, 74, 74));
+                        toggle_style.active = nk_style_item_color(nk_rgb(88, 56, 56));
+                    }
+                    toggle_style.text_normal = nk_rgb(240, 240, 240);
+                    toggle_style.text_hover = nk_rgb(255, 255, 255);
+                    toggle_style.text_active = nk_rgb(255, 255, 255);
+                    if (nk_button_label_styled(ctx, &toggle_style, export_sct_as_png ? "ON" : "OFF"))
+                    {
+                        export_sct_as_png = export_sct_as_png ? nk_false : nk_true;
+                    }
+                }
+                nk_layout_row_end(ctx);
 
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "When enabled, .sct/.sct2 files will be", NK_TEXT_LEFT);
@@ -1528,8 +1557,33 @@ int main(int argc, char *argv[])
                 nk_layout_row_dynamic(ctx, 10, 1);
                 nk_spacing(ctx, 1);
 
-                nk_layout_row_dynamic(ctx, 30, 1);
-                nk_checkbox_label(ctx, "Convert DB files to JSON", (nk_bool *)&export_db_as_json);
+                nk_layout_row_begin(ctx, NK_STATIC, 32, 2);
+                nk_layout_row_push(ctx, 380);
+                nk_label(ctx, "Convert DB files to JSON", NK_TEXT_LEFT);
+                nk_layout_row_push(ctx, 120);
+                {
+                    struct nk_style_button toggle_style = ctx->style.button;
+                    if (export_db_as_json)
+                    {
+                        toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
+                        toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
+                        toggle_style.active = nk_style_item_color(nk_rgb(50, 108, 66));
+                    }
+                    else
+                    {
+                        toggle_style.normal = nk_style_item_color(nk_rgb(100, 64, 64));
+                        toggle_style.hover = nk_style_item_color(nk_rgb(120, 74, 74));
+                        toggle_style.active = nk_style_item_color(nk_rgb(88, 56, 56));
+                    }
+                    toggle_style.text_normal = nk_rgb(240, 240, 240);
+                    toggle_style.text_hover = nk_rgb(255, 255, 255);
+                    toggle_style.text_active = nk_rgb(255, 255, 255);
+                    if (nk_button_label_styled(ctx, &toggle_style, export_db_as_json ? "ON" : "OFF"))
+                    {
+                        export_db_as_json = export_db_as_json ? nk_false : nk_true;
+                    }
+                }
+                nk_layout_row_end(ctx);
 
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "When enabled, .db files will be", NK_TEXT_LEFT);
@@ -1564,13 +1618,17 @@ int main(int argc, char *argv[])
 
         if (show_credits_window)
         {
-            if (nk_begin(ctx, "Credits", nk_rect(window_width / 2 - 250, window_height / 2 - 150, 700, 300),
-                         NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE |
+            const float credits_options_width = 700.0f;
+            const float credits_options_height = 280.0f;
+            const float credits_options_x = (window_width - credits_options_width) * 0.5f;
+            const float credits_options_y = (window_height - credits_options_height) * 0.5f;
+            if (nk_begin(ctx, "Credits", nk_rect(credits_options_x, credits_options_y, credits_options_width, credits_options_height),
+                         NK_WINDOW_BORDER | NK_WINDOW_MOVABLE |
                              NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE))
             {
 
                 nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.3", NK_TEXT_CENTERED);
+                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.3.1", NK_TEXT_CENTERED);
                 nk_label(ctx, "by @akioukun (github.com/akioukun)", NK_TEXT_CENTERED);
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "", NK_TEXT_LEFT);
@@ -1594,7 +1652,11 @@ int main(int argc, char *argv[])
 
         if (show_export_success)
         {
-            if (nk_begin(ctx, "Success", nk_rect(window_width / 2 - 150, window_height / 2 - 50, 300, 100),
+            const float export_success_width = 215.0f;
+            const float export_success_height = 120.0f;
+            const float export_success_x = (window_width - export_success_width) * 0.5f;
+            const float export_success_y = (window_height - export_success_height) * 0.5f;
+            if (nk_begin(ctx, "Success", nk_rect(export_success_x, export_success_y, export_success_width, export_success_height),
                          NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE))
             {
 
@@ -1792,8 +1854,8 @@ int main(int argc, char *argv[])
                         is_task_running = true;
                         status_text = "Extracting all files...";
                         task_progress = 0.0f;
-                        bool convert_sct = export_sct_as_png;
-                        bool convert_db = export_db_as_json;
+                        bool convert_sct = (export_sct_as_png != 0);
+                        bool convert_db = (export_db_as_json != 0);
                         task_future = std::async(std::launch::async, [dest_path, convert_sct, convert_db]()
                                                  {
                             try {
@@ -1840,8 +1902,8 @@ int main(int argc, char *argv[])
 
                         status_text = "Extracting " + std::to_string(nodes_to_extract.size()) + " item(s)...";
                         task_progress = 0.0f;
-                        bool convert_sct = export_sct_as_png;
-                        bool convert_db = export_db_as_json;
+                        bool convert_sct = (export_sct_as_png != 0);
+                        bool convert_db = (export_db_as_json != 0);
                         task_future = std::async(std::launch::async, [dest_path, nodes_to_extract, convert_sct, convert_db]()
                                                  {
                             try {
