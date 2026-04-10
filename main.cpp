@@ -1,4 +1,4 @@
-#define NOMINMAX
+﻿#define NOMINMAX
 #include <iostream>
 #include <string>
 #include <future>
@@ -778,6 +778,42 @@ void export_scsp_as_json_file(const Core::FileNode &node)
             {
                 status_text = "Failed to convert SCSP to JSON";
             }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        status_text = "Export error: " + std::string(e.what());
+    }
+}
+
+void export_json_file(const Core::FileNode &node)
+{
+    try
+    {
+        std::string default_name = node.name;
+        size_t dot_pos = default_name.find_last_of('.');
+        if (dot_pos != std::string::npos)
+        {
+            default_name = default_name.substr(0, dot_pos);
+        }
+        default_name += ".json";
+
+        auto f = pfd::save_file("Export JSON", default_name,
+                                {"JSON Files", "*.json", "All Files", "*.*"});
+
+        if (!f.result().empty())
+        {
+            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            if (file_data.empty())
+            {
+                status_text = "Failed to read JSON file";
+                return;
+            }
+
+            std::ofstream out(f.result(), std::ios::binary);
+            out.write(reinterpret_cast<const char *>(file_data.data()), file_data.size());
+            out.close();
+            status_text = "Exported JSON: " + f.result();
         }
     }
     catch (const std::exception &e)
@@ -2240,6 +2276,7 @@ int main(int argc, char *argv[])
 
                         bool is_db_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_db_file(std::get<Core::FileInfo>(selected_node->data).format);
                         bool is_scsp_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_scsp_file(std::get<Core::FileInfo>(selected_node->data).format);
+                        bool is_json_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_json_file(std::get<Core::FileInfo>(selected_node->data).format);
 
                         if (is_scsp_source)
                         {
@@ -2253,12 +2290,19 @@ int main(int argc, char *argv[])
                         {
                             nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
 
-                            if (is_db_source)
+                            if (is_db_source || is_json_source)
                             {
                                 nk_layout_row_push(ctx, 120);
                                 if (nk_button_label(ctx, "Export as JSON"))
                                 {
-                                    export_db_as_json_file(*selected_node);
+                                    if (is_db_source)
+                                    {
+                                        export_db_as_json_file(*selected_node);
+                                    }
+                                    else
+                                    {
+                                        export_json_file(*selected_node);
+                                    }
                                 }
                             }
                             else
