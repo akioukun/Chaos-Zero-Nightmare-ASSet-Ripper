@@ -1,4 +1,4 @@
-﻿#define NOMINMAX
+#define NOMINMAX
 #include <iostream>
 #include <string>
 #include <future>
@@ -54,6 +54,7 @@ static std::unordered_set<const Core::FileNode *> selected_file_nodes;
 static std::future<void> task_future;
 static std::atomic<float> task_progress = 0.0f;
 static std::atomic<bool> is_task_running = false;
+static std::atomic<bool> is_scan_complete = false;
 static std::string status_text = "Select a data.pack file to begin.";
 static std::unordered_set<const Core::FileNode *> expanded_folders;
 static char search_buffer[256] = {0};
@@ -1269,7 +1270,7 @@ int main(int argc, char *argv[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_Window *win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.3.1",
+    SDL_Window *win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.3.3",
                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
                                        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -1404,6 +1405,7 @@ int main(int argc, char *argv[])
             task_progress = 1.0f;
             if (status_text.find("Scanning") != std::string::npos)
             {
+                is_scan_complete = true;
                 status_text = "Scan complete. " + std::to_string(get_file_count(data_pack->GetFileTree())) + " files found.";
             }
             else if (status_text.find("Extracting") != std::string::npos)
@@ -1628,7 +1630,7 @@ int main(int argc, char *argv[])
             {
 
                 nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.3.1", NK_TEXT_CENTERED);
+                nk_label(ctx, "Chaos Zero Nightmare ASSet Ripper v1.3.3", NK_TEXT_CENTERED);
                 nk_label(ctx, "by @akioukun (github.com/akioukun)", NK_TEXT_CENTERED);
                 nk_layout_row_dynamic(ctx, 20, 1);
                 nk_label(ctx, "", NK_TEXT_LEFT);
@@ -1726,7 +1728,7 @@ int main(int argc, char *argv[])
         if (nk_begin(ctx, "Main", nk_rect(0, 0, (float)window_width, (float)window_height), NK_WINDOW_NO_SCROLLBAR))
         {
             bool pack_loaded = (data_pack != nullptr);
-            bool tree_scanned = pack_loaded && !std::get<Core::FolderInfo>(data_pack->GetFileTree().data).children.empty();
+            bool tree_scanned = pack_loaded && is_scan_complete.load();
             bool selection_exists = (selected_node != nullptr);
             bool has_file_selection = !selected_file_nodes.empty();
             bool has_extract_selection = has_file_selection || (selected_node != nullptr);
@@ -1758,6 +1760,7 @@ int main(int argc, char *argv[])
                                             (int)selected_path.size(), &wpath[0], size_needed);
 
                         data_pack.reset();
+                        is_scan_complete = false;
                         selected_node = nullptr;
                         selected_file_nodes.clear();
                         expanded_folders.clear();
@@ -1801,6 +1804,7 @@ int main(int argc, char *argv[])
                 try
                 {
                     is_task_running = true;
+                    is_scan_complete = false;
                     status_text = "Scanning...";
                     task_progress = 0.0f;
 
