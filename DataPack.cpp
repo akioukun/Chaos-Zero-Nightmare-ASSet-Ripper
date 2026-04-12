@@ -659,6 +659,9 @@ void DataPack::AddFileToTree(const std::string &path, uint64_t offset, uint64_t 
         }
         file_node.data = Core::FileInfo{offset, size, extension};
         current_folder_info->children.push_back(std::move(file_node));
+        
+        parsed_file_count.fetch_add(1, std::memory_order_relaxed);
+        parsed_total_size.fetch_add(size, std::memory_order_relaxed);
     }
     catch (const std::exception &e)
     {

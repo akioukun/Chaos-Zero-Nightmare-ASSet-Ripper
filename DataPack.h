@@ -24,6 +24,8 @@ public:
     std::vector<uint8_t> GetFileData(const Core::FileNode& node);
 
     std::wstring pack_path_;
+    std::atomic<uint32_t> parsed_file_count{0};
+    std::atomic<uint64_t> parsed_total_size{0};
 
 private:
     // this maps only a portion of file at a time.

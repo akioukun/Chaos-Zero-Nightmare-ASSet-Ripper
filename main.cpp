@@ -2029,6 +2029,39 @@ int main(int argc, char *argv[])
                 {
                     draw_file_node(ctx, data_pack->GetFileTree());
                 }
+                else if (data_pack && is_task_running)
+                {
+                    nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
+                    nk_layout_row_push(ctx, 10.0f);
+                    nk_spacing(ctx, 1);
+
+                    nk_layout_row_push(ctx, 24.0f);
+                    struct nk_style_button expand_style = ctx->style.button;
+                    expand_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+                    expand_style.hover = nk_style_item_color(nk_rgb(60, 60, 65));
+                    expand_style.text_normal = nk_rgb(150, 150, 150);
+                    expand_style.rounding = 3.0f;
+                    
+                    nk_widget_disable_begin(ctx);
+                    nk_button_label_styled(ctx, &expand_style, "+");
+                    nk_widget_disable_end(ctx);
+
+                    nk_layout_row_push(ctx, 370.0f);
+                    struct nk_style_button button_style = ctx->style.button;
+                    button_style.normal = nk_style_item_color(nk_rgb(35, 35, 38));
+                    button_style.hover = nk_style_item_color(nk_rgb(35, 35, 38));
+                    button_style.active = nk_style_item_color(nk_rgb(35, 35, 38));
+                    button_style.text_normal = nk_rgb(220, 220, 220);
+                    button_style.text_alignment = NK_TEXT_LEFT;
+                    button_style.padding = nk_vec2(8, 4);
+                    button_style.rounding = 3.0f;
+                    nk_button_label_styled(ctx, &button_style, data_pack->GetFileTree().name.c_str());
+
+                    nk_layout_row_push(ctx, 200.0f);
+                    std::string info = std::to_string(data_pack->parsed_file_count.load(std::memory_order_relaxed)) + " items | " + format_size(data_pack->parsed_total_size.load(std::memory_order_relaxed));
+                    nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
+                    nk_layout_row_end(ctx);
+                }
                 else if (data_pack)
                 {
                     nk_layout_row_dynamic(ctx, 25, 1);
