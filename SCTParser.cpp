@@ -1,4 +1,4 @@
-﻿#include "SCTParser.h"
+#include "SCTParser.h"
 #include <iostream>
 #include <cstring>
 #include <algorithm>
@@ -12,8 +12,42 @@
 #define ASTCENC_API
 #include <astcenc.h>
 namespace SCTParser {
+    namespace {
+        static constexpr int SCT2_SIGNATURE = 844383059;
+        static constexpr int SCT_SIGNATURE_WORD = 17235;
+        static constexpr uint8_t SCT_SIGNATURE_BYTE = 84;
 
-    Format DetectFormat(const std::vector<uint8_t>& data, bool debug) {
+        enum class Format {
+            Unknown = -1,
+            SCT = 10001,
+            SCT2 = 10002
+        };
+
+        struct Header {
+            std::vector<uint8_t> signature;
+            int pixel_format = 0;
+            uint16_t width = 0;
+            uint16_t height = 0;
+            uint16_t texture_width = 0;
+            uint16_t texture_height = 0;
+            int data_offset = 0;
+            bool compressed = false;
+
+            int total_size = 0;
+            uint8_t flags = 0;
+            bool has_alpha = false;
+            bool crop_flag = false;
+            bool raw_data = false;
+            bool mipmap_flag2 = false;
+        };
+
+        struct PixelFormatInfo {
+            std::string format;
+            int channels;
+            std::string type;
+        };
+
+        Format DetectFormat(const std::vector<uint8_t>& data, bool debug = false) {
         if (data.size() < 4) {
             if (debug) std::cout << "Data too short: " << data.size() << " bytes\n";
             return Format::Unknown;
@@ -449,6 +483,7 @@ namespace SCTParser {
         }
 
         return rgba;
+    }
     }
 
     std::vector<uint8_t> ConvertToPNG(const std::vector<uint8_t>& data, bool verbose) {

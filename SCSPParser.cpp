@@ -12,6 +12,18 @@ using json = nlohmann::ordered_json;
 
 namespace
 {
+    struct Header {
+        uint32_t string_offset;
+        uint32_t string_length;
+        uint32_t hdr_version;
+        float width;
+        float height;
+        std::string hash;
+        std::string version;
+        std::string images_path;
+        std::string audio_path;
+    };
+
     template <typename T>
     T read_le(const uint8_t *buf, size_t offset)
     {
@@ -300,6 +312,7 @@ namespace SCSPParser
 
         return LZ4DecompressBlock(data.data() + 8, comp_len, dec_len);
     }
+
 
     Header ParseHeader(const uint8_t *buf, size_t buf_size)
     {

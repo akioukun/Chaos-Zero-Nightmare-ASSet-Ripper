@@ -1,4 +1,4 @@
-﻿#define NOMINMAX
+#define NOMINMAX
 #include <iostream>
 #include <string>
 #include <future>
@@ -2058,7 +2058,7 @@ int main(int argc, char *argv[])
                     nk_button_label_styled(ctx, &button_style, data_pack->GetFileTree().name.c_str());
 
                     nk_layout_row_push(ctx, 200.0f);
-                    std::string info = std::to_string(data_pack->parsed_file_count.load(std::memory_order_relaxed)) + " items | " + format_size(data_pack->parsed_total_size.load(std::memory_order_relaxed));
+                    std::string info = std::to_string(data_pack->GetParsedFileCount()) + " items | " + format_size(data_pack->GetParsedTotalSize());
                     nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
                     nk_layout_row_end(ctx);
                 }

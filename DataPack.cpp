@@ -110,7 +110,7 @@ bool DataPack::EnsureWindow(PackPart &part, uint64_t offset, size_t needed)
         part.view.size = 0;
     }
 
-    uint64_t aligned_offset = (offset / alloc_granularity_) * alloc_granularity_;
+    uint64_t aligned_offset = (offset / alloc_granularity) * alloc_granularity;
     uint64_t adjustment = offset - aligned_offset;
 
     size_t window_size = WINDOW_SIZE;
@@ -179,19 +179,19 @@ bool DataPack::LoadPackPart(const std::wstring &path, size_t partIndex)
         return false;
     }
 
-    parts_.push_back(part);
-    total_file_size_ += part.fileSize;
+    parts.push_back(part);
+    total_file_size += part.fileSize;
     return true;
 }
 
 const uint8_t *DataPack::GetDataAtOffset(uint64_t offset, size_t &outSize)
 {
-    if (parts_.empty())
+    if (parts.empty())
         return nullptr;
 
     // Find which part contains this offset
     uint64_t currentPos = 0;
-    for (auto &part : parts_)
+    for (auto &part : parts)
     {
         if (offset < currentPos + part.fileSize)
         {
@@ -240,14 +240,14 @@ size_t DataPack::ReadBytes(uint64_t offset, void *dest, size_t count)
     return total_read;
 }
 
-DataPack::DataPack(const std::wstring &path) : pack_path_(path), type_(PackType::Unknown)
+DataPack::DataPack(const std::wstring &path) : pack_path(path), type(PackType::Unknown)
 {
-    root_node_.name = "root";
-    root_node_.data = Core::FolderInfo{};
+    root_node.name = "root";
+    root_node.data = Core::FolderInfo{};
 
     SYSTEM_INFO si;
     GetSystemInfo(&si);
-    alloc_granularity_ = si.dwAllocationGranularity;
+    alloc_granularity = si.dwAllocationGranularity;
 
     auto packParts = FindPackParts(path);
     if (packParts.empty())
@@ -266,15 +266,15 @@ DataPack::DataPack(const std::wstring &path) : pack_path_(path), type_(PackType:
         }
     }
 
-    if (parts_.empty())
+    if (parts.empty())
     {
         LogError("Failed to load any pack parts from: " + std::filesystem::path(path).u8string());
         return;
     }
 
-    if (total_file_size_ < 5)
+    if (total_file_size < 5)
     {
-        type_ = PackType::Unknown;
+        type = PackType::Unknown;
         return;
     }
 
@@ -283,17 +283,17 @@ DataPack::DataPack(const std::wstring &path) : pack_path_(path), type_(PackType:
     if (ReadBytes(0, magic, 5) == 5)
     {
         if (memcmp(magic, "\x71\x40\xBD\x73\x93", 5) == 0)
-            type_ = PackType::Encrypted;
+            type = PackType::Encrypted;
         else if (memcmp(magic, "\x50\x4C\x50\x63\x4B", 5) == 0)
-            type_ = PackType::Decrypted;
+            type = PackType::Decrypted;
         else
-            type_ = PackType::Unknown;
+            type = PackType::Unknown;
     }
 }
 
 DataPack::~DataPack()
 {
-    for (auto &part : parts_)
+    for (auto &part : parts)
     {
         if (part.view.data)
         {
@@ -305,7 +305,7 @@ DataPack::~DataPack()
         if (part.hFile != INVALID_HANDLE_VALUE)
             CloseHandle(part.hFile);
     }
-    parts_.clear();
+    parts.clear();
 }
 
 std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
@@ -318,8 +318,8 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
     const auto &info = std::get<Core::FileInfo>(node.data);
 
     uint64_t file_end = static_cast<uint64_t>(info.offset) + static_cast<uint64_t>(info.size);
-    if (static_cast<uint64_t>(info.offset) >= total_file_size_ ||
-        file_end > total_file_size_)
+    if (static_cast<uint64_t>(info.offset) >= total_file_size ||
+        file_end > total_file_size)
     {
         LogError("Invalid file offset/size for: " + std::filesystem::path(node.name).u8string());
         return data;
@@ -337,7 +337,7 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
             return data;
         }
 
-        if (type_ == PackType::Encrypted)
+        if (type == PackType::Encrypted)
         {
             Core::xor_buffer(data.data(), info.size, info.offset);
         }
@@ -357,14 +357,14 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
 
 void DataPack::Scan(std::atomic<float> &progress)
 {
-    auto &root_folder = std::get<Core::FolderInfo>(root_node_.data);
+    auto &root_folder = std::get<Core::FolderInfo>(root_node.data);
     root_folder.children.clear();
 
     try
     {
-        if (type_ == PackType::Encrypted)
+        if (type == PackType::Encrypted)
             ScanEncrypted(progress);
-        else if (type_ == PackType::Decrypted)
+        else if (type == PackType::Decrypted)
             ScanDecrypted(progress);
 
         std::function<void(Core::FileNode &)> process_node = [&](Core::FileNode &node)
@@ -390,7 +390,7 @@ void DataPack::Scan(std::atomic<float> &progress)
             }
         };
 
-        process_node(root_node_);
+        process_node(root_node);
     }
     catch (const std::exception &e)
     {
@@ -412,11 +412,11 @@ void DataPack::ScanEncrypted(std::atomic<float> &progress)
 
     uint64_t cursor = 4; // entries can't start before offset 4
 
-    while (cursor < total_file_size_)
+    while (cursor < total_file_size)
     {
         if ((cursor & 0xFFFFF) == 0)
         {
-            progress = (float)cursor / total_file_size_;
+            progress = (float)cursor / total_file_size;
         }
 
         size_t available = 0;
@@ -428,7 +428,7 @@ void DataPack::ScanEncrypted(std::atomic<float> &progress)
         }
 
         size_t candidate_pos = available;
-        for (size_t pos = 0; pos < available && (cursor + pos) < total_file_size_; ++pos)
+        for (size_t pos = 0; pos < available && (cursor + pos) < total_file_size; ++pos)
         {
             uint64_t abs_pos = cursor + pos;
             uint8_t decrypted_byte = block[pos] ^ key[abs_pos % Core::KEY_SIZE];
@@ -449,7 +449,7 @@ void DataPack::ScanEncrypted(std::atomic<float> &progress)
         uint64_t abs_pos = cursor + candidate_pos;
         uint64_t header_offset = abs_pos - 4;
 
-        if (header_offset + 15 > total_file_size_)
+        if (header_offset + 15 > total_file_size)
         {
             cursor = abs_pos + 1;
             continue;
@@ -468,17 +468,17 @@ void DataPack::ScanEncrypted(std::atomic<float> &progress)
         uint8_t path_len = header_buffer[5];
         uint32_t data_len = read_u32_le(&header_buffer[6]);
 
-        if (container_len > total_file_size_ ||
+        if (container_len > total_file_size ||
             path_len == 0 ||
             path_len > 255 ||
-            data_len > total_file_size_ ||
+            data_len > total_file_size ||
             container_len != path_len + data_len + 19)
         {
             cursor = abs_pos + 1;
             continue;
         }
 
-        if (header_offset + 15 + path_len + data_len > total_file_size_)
+        if (header_offset + 15 + path_len + data_len > total_file_size)
         {
             cursor = abs_pos + 1;
             continue;
@@ -509,11 +509,11 @@ void DataPack::ScanDecrypted(std::atomic<float> &progress)
 {
     uint64_t cursor = 0;
 
-    while (cursor < total_file_size_)
+    while (cursor < total_file_size)
     {
         if ((cursor & 0xFFFFF) == 0)
         {
-            progress = (float)cursor / total_file_size_;
+            progress = (float)cursor / total_file_size;
         }
 
         size_t available = 0;
@@ -543,7 +543,7 @@ void DataPack::ScanDecrypted(std::atomic<float> &progress)
 
         uint64_t header_offset = abs_pos - 4;
 
-        if (header_offset + 15 > total_file_size_)
+        if (header_offset + 15 > total_file_size)
         {
             cursor = abs_pos + 1;
             continue;
@@ -560,7 +560,7 @@ void DataPack::ScanDecrypted(std::atomic<float> &progress)
         uint8_t path_len = header_buffer[5];
         uint32_t data_len = read_u32_le(&header_buffer[6]);
 
-        if (container_len > total_file_size_ || path_len == 0 || path_len > 255 || data_len > total_file_size_)
+        if (container_len > total_file_size || path_len == 0 || path_len > 255 || data_len > total_file_size)
         {
             cursor = abs_pos + 1;
             continue;
@@ -572,7 +572,7 @@ void DataPack::ScanDecrypted(std::atomic<float> &progress)
             continue;
         }
 
-        if (header_offset + 15 + path_len > total_file_size_)
+        if (header_offset + 15 + path_len > total_file_size)
         {
             cursor = abs_pos + 1;
             continue;
@@ -594,7 +594,7 @@ void DataPack::ScanDecrypted(std::atomic<float> &progress)
 
         uint64_t file_offset = header_offset + 15 + path_len;
 
-        if (file_offset + data_len <= total_file_size_)
+        if (file_offset + data_len <= total_file_size)
         {
             AddFileToTree(path_str, file_offset, static_cast<uint64_t>(data_len));
             cursor = file_offset + data_len;
@@ -618,7 +618,7 @@ void DataPack::AddFileToTree(const std::string &path, uint64_t offset, uint64_t 
         if (parts.empty())
             return;
 
-        auto *current_folder_info = &std::get<Core::FolderInfo>(root_node_.data);
+        auto *current_folder_info = &std::get<Core::FolderInfo>(root_node.data);
         std::string current_path = "";
 
         for (size_t i = 0; i + 1 < parts.size(); ++i)
@@ -672,7 +672,7 @@ void DataPack::AddFileToTree(const std::string &path, uint64_t offset, uint64_t 
 void DataPack::ExtractAll(const std::wstring &output_path, std::atomic<float> &progress, bool convert_sct_to_png, bool convert_db_to_json)
 {
     LogInfo("ExtractAll started");
-    Extract(root_node_, output_path, progress, convert_sct_to_png, convert_db_to_json);
+    Extract(root_node, output_path, progress, convert_sct_to_png, convert_db_to_json);
     LogInfo("ExtractAll finished");
 }
 

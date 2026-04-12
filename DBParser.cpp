@@ -12,9 +12,38 @@ namespace DBParser
 {
     using json = nlohmann::json;
 
-    static constexpr const char *KEY_HEX = "91AE4ED4644F585162EC1BD5EF24ADDBAF838242AEF51E97804B134FFD8CE5BB4F6E3E6451147CDF56C318E5E964C999C0D95CC860822E6B418BE465D79A036DBF67AB3DA72AB1023A4561F444E5CE858D23EA10FEB4899151AD7E43FF3E2419A97B4DD3AF4EF5C829E5AF4ACE9436F6B6B6382E9DFD26642099011A4899089C9D4B9F80BBB00A4CC73255CE1F78646E91C9C12313F5D840DC51457010D37D19615BB69888B42B19E749F993C00337E9332F89B320C173A5653848788798A771739E72DBC84C7946597149BDDAE4E3BD1A17856C85A555CFA24F6352D005933B50042BE0BA4C708DE8EBB52059B2059C9BFE90D8923DF74B43911BBC00BB6BFA";
+    namespace
+    {
+        struct Header
+        {
+            std::vector<uint8_t> magic; // 5 bytes
+            uint8_t version;
+            uint16_t headerSize;
+            uint8_t unk;
+            uint64_t unk1;
+            uint32_t defaultFileCount;
+            uint32_t hashTableCount;
+            uint64_t hashTableOffset; // UInt40
+            uint64_t unk5;
+        };
 
-    std::vector<uint8_t> DecryptDB(const std::vector<uint8_t> &data)
+        struct HashTableEntry
+        {
+            uint64_t entryOffset; // UInt40
+        };
+
+        struct FileChunkHeader
+        {
+            uint32_t entrySize;
+            uint8_t entryType;
+            uint8_t fileNameLength;
+            uint32_t fileSize;
+            uint64_t nextEntry; // UInt40
+        };
+
+        static constexpr const char *KEY_HEX = "91AE4ED4644F585162EC1BD5EF24ADDBAF838242AEF51E97804B134FFD8CE5BB4F6E3E6451147CDF56C318E5E964C999C0D95CC860822E6B418BE465D79A036DBF67AB3DA72AB1023A4561F444E5CE858D23EA10FEB4899151AD7E43FF3E2419A97B4DD3AF4EF5C829E5AF4ACE9436F6B6B6382E9DFD26642099011A4899089C9D4B9F80BBB00A4CC73255CE1F78646E91C9C12313F5D840DC51457010D37D19615BB69888B42B19E749F993C00337E9332F89B320C173A5653848788798A771739E72DBC84C7946597149BDDAE4E3BD1A17856C85A555CFA24F6352D005933B50042BE0BA4C708DE8EBB52059B2059C9BFE90D8923DF74B43911BBC00BB6BFA";
+
+        std::vector<uint8_t> DecryptDB(const std::vector<uint8_t> &data)
     {
         std::vector<uint8_t> key;
         key.reserve(256);
@@ -49,6 +78,7 @@ namespace DBParser
         }
         return {};
     }
+}
 
     std::string ConvertToJson(const std::vector<uint8_t> &data)
     {
