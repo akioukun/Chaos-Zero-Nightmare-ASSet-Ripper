@@ -2114,7 +2114,7 @@ int main(int argc, char *argv[])
                 nk_stroke_line(&ctx->current->buffer, bounds.x + 4, bounds.y + 10, bounds.x + 4, bounds.y + bounds.h - 10, 1.0f, nk_rgb(100, 100, 100));
 
                 nk_layout_row_push(ctx, right_width - 8.0f);
-                if (nk_group_begin(ctx, "Preview", NK_WINDOW_BORDER | NK_WINDOW_TITLE))
+                if (nk_group_begin(ctx, "Preview", NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR))
                 {
 
                     if (current_preview_mode == PreviewMode::Image)
@@ -2383,7 +2383,7 @@ int main(int argc, char *argv[])
                             nk_layout_row_end(ctx);
                         }
 
-                        nk_layout_row_dynamic(ctx, content_height - 100, 1);
+                        nk_layout_row_dynamic(ctx, content_height - 130, 1);
                         if (nk_group_begin(ctx, "JsonPreview", NK_WINDOW_BORDER))
                         {
                             std::stringstream ss(preview_json_data);
@@ -2472,7 +2472,7 @@ int main(int argc, char *argv[])
                         }
                         nk_layout_row_end(ctx);
 
-                        nk_layout_row_dynamic(ctx, content_height - 100, 1);
+                        nk_layout_row_dynamic(ctx, content_height - 130, 1);
                         if (nk_group_begin(ctx, "TextPreview", NK_WINDOW_BORDER))
                         {
                             std::stringstream ss(preview_atlas_data);
