@@ -39,13 +39,6 @@
 #define INITIAL_WINDOW_HEIGHT 900
 #define DOUBLE_CLICK_TIME_MS 300
 
-#define ICON_FOLDER ""
-#define ICON_FILE ""
-#define ICON_IMAGE ""
-#define ICON_COMPRESSED ""
-#define ICON_ATLAS ""
-#define ICON_DATABASE ""
-
 using json = nlohmann::ordered_json;
 
 static std::unique_ptr<DataPack> data_pack = nullptr;
@@ -104,16 +97,6 @@ static bool show_export_options_window = false;
 static nk_bool export_sct_as_png = nk_true;
 static bool export_convert_all_sct = false;
 static nk_bool export_db_as_json = nk_true;
-
-static std::string wstring_to_utf8(const std::wstring &w)
-{
-    if (w.empty())
-        return {};
-    int needed = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-    std::string s(needed, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), needed, nullptr, nullptr);
-    return s;
-}
 
 static bool show_credits_window = false;
 static bool show_export_success = false;
@@ -270,32 +253,6 @@ bool is_text_file(const std::string &ext)
     std::string ext_lower = ext;
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
     return ext_lower == ".txt" || ext_lower == ".atlas";
-}
-
-std::string get_file_icon(const std::string &ext)
-{
-    std::string ext_lower = ext;
-    std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
-
-    if (ext_lower == ".png" || ext_lower == ".jpg" || ext_lower == ".jpeg" ||
-        ext_lower == ".bmp" || ext_lower == ".tga" || ext_lower == ".webp" ||
-        ext_lower == ".sct" || ext_lower == ".sct2")
-    {
-        return ICON_IMAGE;
-    }
-    else if (ext_lower == ".atlas" || ext_lower == ".txt")
-    {
-        return ICON_ATLAS;
-    }
-    else if (ext_lower == ".db" || ext_lower == ".json" || ext_lower == ".scsp")
-    {
-        return ICON_DATABASE;
-    }
-    else if (ext_lower == ".srt" || ext_lower == ".zip" || ext_lower == ".pack")
-    {
-        return ICON_COMPRESSED;
-    }
-    return ICON_FILE;
 }
 
 void load_json_preview(const Core::FileNode &node, const std::string &content = "")
