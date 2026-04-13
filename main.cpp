@@ -59,6 +59,7 @@ static std::string status_text = "Select a data.pack file to begin.";
 static std::unordered_set<const Core::FileNode *> expanded_folders;
 static char search_buffer[256] = {0};
 static std::string search_query = "";
+static std::vector<const Core::FileNode*> visible_nodes;
 
 static GLuint preview_texture = 0;
 static int preview_width = 0;
@@ -1162,6 +1163,8 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
         if (!has_matching_child(node, search_query))
             return;
 
+        visible_nodes.push_back(&node);
+
         if (std::holds_alternative<Core::FolderInfo>(node.data))
         {
             const auto &folder = std::get<Core::FolderInfo>(node.data);
@@ -1382,6 +1385,7 @@ int main(int argc, char *argv[])
     }
 
     bool running = true;
+    bool scroll_to_selected = false;
     while (running)
     {
         SDL_Event evt;
@@ -1415,6 +1419,55 @@ int main(int argc, char *argv[])
                         }
                         SDL_DestroyWindow(image_window);
                         image_window = nullptr;
+                    }
+                }
+            }
+            else if (evt.type == SDL_KEYDOWN)
+            {
+                if (selected_node)
+                {
+                    if ((evt.key.keysym.sym == SDLK_UP || evt.key.keysym.sym == SDLK_DOWN) && !visible_nodes.empty())
+                    {
+                        auto it = std::find(visible_nodes.begin(), visible_nodes.end(), selected_node);
+                        if (it != visible_nodes.end())
+                        {
+                            if (evt.key.keysym.sym == SDLK_UP && it > visible_nodes.begin())
+                            {
+                                selected_node = *(it - 1);
+                                handle_node_click(selected_node, std::holds_alternative<Core::FolderInfo>(selected_node->data));
+                                scroll_to_selected = true;
+                            }
+                            else if (evt.key.keysym.sym == SDLK_DOWN && it < visible_nodes.end() - 1)
+                            {
+                                selected_node = *(it + 1);
+                                handle_node_click(selected_node, std::holds_alternative<Core::FolderInfo>(selected_node->data));
+                                scroll_to_selected = true;
+                            }
+                        }
+                    }
+                    else if (evt.key.keysym.sym == SDLK_RETURN)
+                    {
+                        if (std::holds_alternative<Core::FolderInfo>(selected_node->data))
+                        {
+                            if (expanded_folders.find(selected_node) != expanded_folders.end())
+                                expanded_folders.erase(selected_node);
+                            else
+                                expanded_folders.insert(selected_node);
+                        }
+                    }
+                    else if (evt.key.keysym.sym == SDLK_RIGHT)
+                    {
+                        if (std::holds_alternative<Core::FolderInfo>(selected_node->data))
+                        {
+                            expanded_folders.insert(selected_node);
+                        }
+                    }
+                    else if (evt.key.keysym.sym == SDLK_LEFT)
+                    {
+                        if (std::holds_alternative<Core::FolderInfo>(selected_node->data))
+                        {
+                            expanded_folders.erase(selected_node);
+                        }
                     }
                 }
             }
@@ -2005,7 +2058,7 @@ int main(int argc, char *argv[])
             search_query = search_buffer;
             nk_layout_row_end(ctx);
 
-            float content_height = (float)window_height - 40;
+            float content_height = (float)window_height - 85;
             bool showing_preview_panel = (current_preview_mode != PreviewMode::None || !preview_error.empty());
 
             static float sidebar_width = 600.0f;
@@ -2025,9 +2078,49 @@ int main(int argc, char *argv[])
 
             if (nk_group_begin(ctx, "FileTree", NK_WINDOW_BORDER | NK_WINDOW_TITLE))
             {
+                visible_nodes.clear();
+
                 if (data_pack && tree_scanned)
                 {
                     draw_file_node(ctx, data_pack->GetFileTree());
+
+                    if (scroll_to_selected && selected_node)
+                    {
+                        auto it = std::find(visible_nodes.begin(), visible_nodes.end(), selected_node);
+                        if (it != visible_nodes.end())
+                        {
+                            int index = std::distance(visible_nodes.begin(), it);
+                            nk_uint current_x, current_y;
+                            nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
+
+                            float row_height = 26.0f + ctx->style.window.spacing.y;
+                            float node_y = index * row_height;
+                            float view_h = nk_window_get_content_region(ctx).h;
+
+                            // keep the selected row inside a safe visible band so keyboard navigation
+                            // doesn't outrun scrolling when moving downward quickly.
+                            float top_margin = row_height * 2.0f;
+                            float bottom_margin = row_height * 2.0f;
+                            float visible_top = (float)current_y + top_margin;
+                            float visible_bottom = (float)current_y + view_h - bottom_margin;
+
+                            if (node_y < visible_top)
+                            {
+                                float target = node_y - top_margin;
+                                if (target < 0.0f)
+                                    target = 0.0f;
+                                nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                            }
+                            else if (node_y + row_height > visible_bottom)
+                            {
+                                float target = node_y + row_height - view_h + bottom_margin;
+                                if (target < 0.0f)
+                                    target = 0.0f;
+                                nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                            }
+                        }
+                        scroll_to_selected = false;
+                    }
                 }
                 else if (data_pack && is_task_running)
                 {
