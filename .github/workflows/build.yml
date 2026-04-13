@@ -50,7 +50,7 @@ jobs:
         run: |
           if (!(Test-Path "libs/astc/astcenc-native-static.lib")) {
 
-            git clone --depth 1 https://github.com/ARM-software/astc-encoder "$env:RUNNER_TEMP/astc-encoder"
+            git clone --depth 1 --branch 4.2 https://github.com/ARM-software/astc-encoder "$env:RUNNER_TEMP/astc-encoder"
 
             cmake -S "$env:RUNNER_TEMP/astc-encoder" -B "$env:RUNNER_TEMP/astc-encoder/build" -A x64
             cmake --build "$env:RUNNER_TEMP/astc-encoder/build" --config Release --parallel
