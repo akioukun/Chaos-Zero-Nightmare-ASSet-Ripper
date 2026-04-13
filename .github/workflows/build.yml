@@ -9,6 +9,7 @@ on:
 env:
   BUILD_TYPE: Release
   VCPKG_DEFAULT_TRIPLET: x64-windows
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -24,9 +25,7 @@ jobs:
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: |
-            ${{ runner.temp }}/vcpkg
-            ${{ runner.temp }}/vcpkg_installed
+          path: ${{ runner.temp }}/vcpkg
           key: vcpkg-${{ runner.os }}-${{ env.VCPKG_DEFAULT_TRIPLET }}
 
       - name: Setup vcpkg
@@ -39,41 +38,6 @@ jobs:
 
           & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install sdl2 sdl2-image glew --triplet $env:VCPKG_DEFAULT_TRIPLET
 
-      - name: Cache ASTC encoder
-        uses: actions/cache@v4
-        with:
-          path: libs/astc
-          key: astc-lib-${{ runner.os }}
-
-      - name: Build ASTC encoder (if missing)
-        shell: pwsh
-        run: |
-          if (!(Test-Path "libs/astc/astcenc-native-static.lib")) {
-
-            git clone --depth 1 --branch 4.x https://github.com/ARM-software/astc-encoder "$env:RUNNER_TEMP/astc-encoder"
-
-            cmake -S "$env:RUNNER_TEMP/astc-encoder" -B "$env:RUNNER_TEMP/astc-encoder/build" -A x64
-            cmake --build "$env:RUNNER_TEMP/astc-encoder/build" --config Release --parallel
-
-            $lib = Get-ChildItem "$env:RUNNER_TEMP/astc-encoder/build" -Recurse -Filter "astcenc-native-static.lib" | Select-Object -First 1
-
-            if (-not $lib) {
-              $lib = Get-ChildItem "$env:RUNNER_TEMP/astc-encoder/build" -Recurse -Filter "*astcenc*static*.lib" | Select-Object -First 1
-            }
-
-            if (-not $lib) {
-              throw "ASTC static lib not found"
-            }
-
-            New-Item -ItemType Directory -Force -Path "libs/astc" | Out-Null
-            Copy-Item $lib.FullName "libs/astc/astcenc-native-static.lib" -Force
-
-            Write-Host "Copied ASTC lib"
-          }
-          else {
-            Write-Host "Using cached ASTC library"
-          }
-
       - name: Configure CMake
         shell: pwsh
         run: |
@@ -85,3 +49,9 @@ jobs:
         shell: pwsh
         run: |
           cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChaosZeroNightmareRipper
+          path: build/Release/
