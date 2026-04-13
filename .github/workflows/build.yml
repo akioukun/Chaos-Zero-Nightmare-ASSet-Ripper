@@ -9,7 +9,6 @@ on:
 env:
   BUILD_TYPE: Release
   VCPKG_DEFAULT_TRIPLET: x64-windows
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -17,18 +16,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: MSVC environment
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
-          path: ${{ runner.temp }}/vcpkg
+          path: |
+            ${{ runner.temp }}/vcpkg
           key: vcpkg-${{ runner.os }}-${{ env.VCPKG_DEFAULT_TRIPLET }}
 
-      - name: Setup vcpkg
+      - name: Setup vcpkg and dependencies
         shell: pwsh
         run: |
           if (!(Test-Path "$env:RUNNER_TEMP/vcpkg")) {
@@ -37,6 +37,39 @@ jobs:
           }
 
           & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install sdl2 sdl2-image glew --triplet $env:VCPKG_DEFAULT_TRIPLET
+
+      - name: Cache ASTC library
+        uses: actions/cache@v5
+        with:
+          path: libs/astc
+          key: astc-${{ runner.os }}
+
+      - name: Build ASTC encoder
+        shell: pwsh
+        run: |
+          if (!(Test-Path "libs/astc/astcenc-native-static.lib")) {
+
+            git clone --depth 1 --branch 4.x https://github.com/ARM-software/astc-encoder "$env:RUNNER_TEMP/astc"
+
+            cmake -S "$env:RUNNER_TEMP/astc" -B "$env:RUNNER_TEMP/astc/build" -A x64
+            cmake --build "$env:RUNNER_TEMP/astc/build" --config Release --parallel
+
+            $lib = Get-ChildItem "$env:RUNNER_TEMP/astc/build" -Recurse -Filter "*.lib" |
+              Where-Object { $_.Name -like "*astc*" } |
+              Select-Object -First 1
+
+            if (-not $lib) {
+              throw "ASTC library not found"
+            }
+
+            New-Item -ItemType Directory -Force -Path "libs/astc" | Out-Null
+            Copy-Item $lib.FullName "libs/astc/astcenc-native-static.lib" -Force
+
+            Write-Host "ASTC library copied from $($lib.FullName)"
+          }
+          else {
+            Write-Host "Using cached ASTC library"
+          }
 
       - name: Configure CMake
         shell: pwsh
