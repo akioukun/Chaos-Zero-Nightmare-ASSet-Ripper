@@ -36,6 +36,7 @@
 #include "SpineDictionary.h"
 #include "SpineRenderer.h"
 #include "Logger.h"
+#include "RipperOptions.h"
 #include "json.hpp"
 
 #define INITIAL_WINDOW_WIDTH 1400
@@ -141,6 +142,23 @@ static std::string spine_selected_bone = "";
 static char spine_scale_max_buf[16] = "1000";
 static bool spine_scroll_to_bone = false;
 static std::unordered_set<std::string> spine_collapsed_bones; // folded in list only, not hidden
+
+static void save_options_to_ini()
+{
+    RipperOptions options;
+    options.exportSctAsPng = (export_sct_as_png != nk_false);
+    options.exportDbAsJson = (export_db_as_json != nk_false);
+    options.enableOpenFolder = (enable_open_folder != nk_false);
+    SaveRipperOptions(options);
+}
+
+static void load_options_from_ini()
+{
+    const RipperOptions options = LoadRipperOptions();
+    export_sct_as_png = options.exportSctAsPng ? nk_true : nk_false;
+    export_db_as_json = options.exportDbAsJson ? nk_true : nk_false;
+    enable_open_folder = options.enableOpenFolder ? nk_true : nk_false;
+}
 
 int get_file_count(const Core::FileNode &node)
 {
@@ -1548,6 +1566,8 @@ int run_spine_test(const std::string& pack_path_str) {
 
 int main(int argc, char *argv[])
 {
+    load_options_from_ini();
+
     SDL_Init(SDL_INIT_VIDEO);
     IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG | IMG_INIT_WEBP);
 
@@ -1934,6 +1954,7 @@ int main(int argc, char *argv[])
                     if (nk_button_label_styled(ctx, &toggle_style, export_sct_as_png ? "ON" : "OFF"))
                     {
                         export_sct_as_png = export_sct_as_png ? nk_false : nk_true;
+                        save_options_to_ini();
                     }
                 }
                 nk_layout_row_end(ctx);
@@ -1969,6 +1990,7 @@ int main(int argc, char *argv[])
                     if (nk_button_label_styled(ctx, &toggle_style, export_db_as_json ? "ON" : "OFF"))
                     {
                         export_db_as_json = export_db_as_json ? nk_false : nk_true;
+                        save_options_to_ini();
                     }
                 }
                 nk_layout_row_end(ctx);
@@ -2004,6 +2026,7 @@ int main(int argc, char *argv[])
                     if (nk_button_label_styled(ctx, &toggle_style, enable_open_folder ? "ON" : "OFF"))
                     {
                         enable_open_folder = enable_open_folder ? nk_false : nk_true;
+                        save_options_to_ini();
                     }
                 }
                 nk_layout_row_end(ctx);
@@ -2025,6 +2048,7 @@ int main(int argc, char *argv[])
                 nk_layout_row_dynamic(ctx, 30, 2);
                 if (nk_button_label(ctx, "OK"))
                 {
+                    save_options_to_ini();
                     show_export_options_window = false;
                     status_text = "Options saved";
                 }
