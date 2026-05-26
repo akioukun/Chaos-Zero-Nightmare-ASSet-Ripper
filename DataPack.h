@@ -8,7 +8,7 @@
 
 class DataPack {
 public:
-    enum class PackType { Unknown, Encrypted, Decrypted };
+    enum class PackType { Unknown, Encrypted, Decrypted, LocalDirectory };
 
     DataPack(const std::wstring& path);
     ~DataPack();
@@ -49,6 +49,7 @@ private:
 
     void ScanEncrypted(std::atomic<float>& progress);
     void ScanDecrypted(std::atomic<float>& progress);
+    void ScanLocalDirectory(std::atomic<float>& progress);
     void AddFileToTree(const std::string& path, uint64_t offset, uint64_t size);  
     void ExtractNode(const Core::FileNode& node, const std::wstring& current_path, std::atomic<uint64_t>& extracted_size, const uint64_t total_size, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json);
     

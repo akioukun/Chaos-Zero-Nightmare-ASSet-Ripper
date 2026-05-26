@@ -1,7 +1,7 @@
 # Chaos Zero Nightmare ASSet Ripper
 ASSet Ripper is a tool for extracting encrypted pack assets from yuna engine, or certain anime games.
 
-![Preview](./img.png)
+![Preview](./assets/img.png)
 
 
 ## [Download](https://nightly.link/akioukun/Chaos-Zero-Nightmare-ASSet-Ripper/workflows/build/main/ChaosZeroNightmareRipper.zip) 
@@ -12,7 +12,7 @@ ASSet Ripper is a tool for extracting encrypted pack assets from yuna engine, or
 Preview supported formats such as:
 - SCT images (exported as PNG files)
 - Encrypted databases (exported as JSON files)
-- SCSP [spine](https://esotericsoftware.com/spine-in-depth) format (exported as JSON), compatible with tools such as [SpineViewer](https://github.com/ww-rm/SpineViewer)
+- SCSP [spine](https://esotericsoftware.com/spine-in-depth) format (exported as JSON), compatible with tools such as [SpineViewer](https://github.com/ww-rm/SpineViewer). The tool also includes an integrated Spine Viewer
 
 And export either all files or only selected files and folders, depending on your preference.
 

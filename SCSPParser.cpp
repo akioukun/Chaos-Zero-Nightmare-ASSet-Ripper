@@ -2166,4 +2166,22 @@ namespace SCSPParser
         return ParseSCSPToJson(decompressed);
     }
 
+    HeaderInfo ExtractHeader(const std::vector<uint8_t> &scsp_data)
+    {
+        auto decompressed = DecompressSCSP(scsp_data);
+        if (decompressed.empty())
+            return {};
+
+        Header hdr = ParseHeader(decompressed.data(), decompressed.size());
+
+        HeaderInfo info;
+        info.width = hdr.width;
+        info.height = hdr.height;
+        info.version = hdr.version;
+        info.images_path = hdr.images_path;
+        info.audio_path = hdr.audio_path;
+        info.hash = hdr.hash;
+        return info;
+    }
+
 }

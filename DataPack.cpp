@@ -249,6 +249,14 @@ DataPack::DataPack(const std::wstring &path) : pack_path(path), type(PackType::U
     GetSystemInfo(&si);
     alloc_granularity = si.dwAllocationGranularity;
 
+    std::filesystem::path fs_path(path);
+    if (std::filesystem::is_directory(fs_path))
+    {
+        type = PackType::LocalDirectory;
+        total_file_size = 0;
+        return;
+    }
+
     auto packParts = FindPackParts(path);
     if (packParts.empty())
     {
@@ -317,6 +325,30 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
 
     const auto &info = std::get<Core::FileInfo>(node.data);
 
+    if (type == PackType::LocalDirectory)
+    {
+        std::filesystem::path full_path = std::filesystem::path(pack_path) / node.full_path;
+        try
+        {
+            std::ifstream file(full_path, std::ios::binary);
+            if (file)
+            {
+                data.resize(info.size);
+                file.read(reinterpret_cast<char*>(data.data()), info.size);
+            }
+            else
+            {
+                LogError("Could not open local file: " + full_path.u8string());
+            }
+        }
+        catch (const std::exception &e)
+        {
+            LogError("Error reading local directory file data: " + std::string(e.what()));
+            data.clear();
+        }
+        return data;
+    }
+
     uint64_t file_end = static_cast<uint64_t>(info.offset) + static_cast<uint64_t>(info.size);
     if (static_cast<uint64_t>(info.offset) >= total_file_size ||
         file_end > total_file_size)
@@ -355,6 +387,32 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
 // Scan
 // ---------------------------------------------------------------------------
 
+void DataPack::ScanLocalDirectory(std::atomic<float> &progress)
+{
+    std::filesystem::path base_path(pack_path);
+    uint32_t count = 0;
+    uint64_t total = 0;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(base_path, std::filesystem::directory_options::skip_permission_denied))
+    {
+        if (entry.is_regular_file())
+        {
+            std::filesystem::path rel_path = std::filesystem::relative(entry.path(), base_path);
+            std::string rel_path_str = rel_path.u8string();
+            std::replace(rel_path_str.begin(), rel_path_str.end(), '\\', '/');
+
+            uint64_t size = entry.file_size();
+            AddFileToTree(rel_path_str, 0, size);
+            count++;
+            total += size;
+        }
+    }
+
+    parsed_file_count = count;
+    parsed_total_size = total;
+    progress = 1.0f;
+}
+
 void DataPack::Scan(std::atomic<float> &progress)
 {
     auto &root_folder = std::get<Core::FolderInfo>(root_node.data);
@@ -366,6 +424,8 @@ void DataPack::Scan(std::atomic<float> &progress)
             ScanEncrypted(progress);
         else if (type == PackType::Decrypted)
             ScanDecrypted(progress);
+        else if (type == PackType::LocalDirectory)
+            ScanLocalDirectory(progress);
 
         std::function<void(Core::FileNode &)> process_node = [&](Core::FileNode &node)
         {

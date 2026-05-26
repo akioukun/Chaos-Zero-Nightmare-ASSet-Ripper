@@ -486,7 +486,7 @@ namespace SCTParser {
     }
     }
 
-    std::vector<uint8_t> ConvertToPNG(const std::vector<uint8_t>& data, bool verbose) {
+    RGBAImage ConvertToRGBA(const std::vector<uint8_t>& data, bool verbose) {
         try {
             Format format_type = DetectFormat(data);
             Header header;
@@ -549,17 +549,15 @@ namespace SCTParser {
             int width = header.width;
             int height = header.height;
             if (width <= 0 || height <= 0 || width > 16384 || height > 16384) {
-                LogError("SCT ConvertToPNG: invalid dimensions");
+                LogError("SCT ConvertToRGBA: invalid dimensions");
                 return {};
             }
             std::vector<uint8_t> final_rgba_data;
-            bool has_alpha = false;
 
             if(format_info.type == "L8")
             {
                 if (verbose) std::cout<< "Decoding L8...\n";
                 final_rgba_data = L8ToRGBA(image_data);
-                has_alpha = false;
             }
             else if (format_info.type == "RGB565_LE") {
                 if (verbose) std::cout << "Decoding RGB565 Little Endian...\n";
@@ -569,66 +567,71 @@ namespace SCTParser {
             else if (format_info.type == "ETC2_RGBA8") {
                 if (verbose) std::cout << "Decoding ETC2 RGBA8...\n";
                 final_rgba_data = DecodeETC2RGBA8(image_data, width, height, verbose);
-                has_alpha = true;
             }
             else if (format_info.type == "ASTC_4x4") {
                 if (verbose) std::cout << "Decoding ASTC 4x4...\n";
                 final_rgba_data = DecodeASTC(image_data, width, height, 4, 4);
                 if (final_rgba_data.empty()) { LogError("ASTC 4x4 decode failed"); return {}; }
                 BGRASwapRB(final_rgba_data);
-                has_alpha = true;
             }
             else if(format_info.type == "ASTC_6x6"){
                 if (verbose) std::cout << "Decoding ASTC 6x6...\n";
                 final_rgba_data = DecodeASTC(image_data, width, height, 6, 6);
                 if(final_rgba_data.empty()) { LogError("ASTC 6x6 decode failed"); return {};}
                 BGRASwapRB(final_rgba_data);
-                has_alpha = true;
             }
             else if (format_info.type == "ASTC_8x8") {
                 if (verbose) std::cout << "Decoding ASTC 8x8...\n";
                 final_rgba_data = DecodeASTC(image_data, width, height, 8, 8);
                 if (final_rgba_data.empty()) { LogError("ASTC 8x8 decode failed"); return {}; }
                 BGRASwapRB(final_rgba_data);
-                has_alpha = true;
             }
             else {
                 if (verbose) std::cout << "Using raw " << format_info.type << " data\n";
                 final_rgba_data = image_data;
-                has_alpha = format_info.format.find("RGBA") != std::string::npos || header.has_alpha;
             }
 
             if (final_rgba_data.empty() || final_rgba_data.size() < static_cast<size_t>(width) * height * 4) {
                 if (verbose) std::cout << "Error: No valid image data produced\n";
-                LogError("SCT ConvertToPNG: RGBA buffer invalid size");
+                LogError("SCT ConvertToRGBA: RGBA buffer invalid size");
                 return {};
             }
 
-
-            std::vector<uint8_t> png_data;
-            auto write_func = [](void* context, void* data, int size) {
-                auto* vec = static_cast<std::vector<uint8_t>*>(context);
-                uint8_t* bytes = static_cast<uint8_t*>(data);
-                vec->insert(vec->end(), bytes, bytes + size);
-                };
-
-            int result = stbi_write_png_to_func(write_func, &png_data, width, height, 4,
-                final_rgba_data.data(), width * 4);
-
-            if (result == 0) {
-                if (verbose) std::cout << "Error: PNG encoding failed\n";
-                LogError("SCT ConvertToPNG: PNG encoding failed");
-                return {};
-            }
-
-            return png_data;
+            RGBAImage result;
+            result.data = std::move(final_rgba_data);
+            result.width = width;
+            result.height = height;
+            return result;
 
         }
         catch (const std::exception& e) {
             if (verbose) std::cout << "Error during conversion: " << e.what() << "\n";
-            LogError(std::string("SCT ConvertToPNG exception: ") + e.what());
+            LogError(std::string("SCT ConvertToRGBA exception: ") + e.what());
             return {};
         }
+    }
+
+    std::vector<uint8_t> ConvertToPNG(const std::vector<uint8_t>& data, bool verbose) {
+        RGBAImage rgba = ConvertToRGBA(data, verbose);
+        if (rgba.data.empty()) return {};
+
+        std::vector<uint8_t> png_data;
+        auto write_func = [](void* context, void* data, int size) {
+            auto* vec = static_cast<std::vector<uint8_t>*>(context);
+            uint8_t* bytes = static_cast<uint8_t*>(data);
+            vec->insert(vec->end(), bytes, bytes + size);
+        };
+
+        int result = stbi_write_png_to_func(write_func, &png_data, rgba.width, rgba.height, 4,
+            rgba.data.data(), rgba.width * 4);
+
+        if (result == 0) {
+            if (verbose) std::cout << "Error: PNG encoding failed\n";
+            LogError("SCT ConvertToPNG: PNG encoding failed");
+            return {};
+        }
+
+        return png_data;
     }
 
 }
