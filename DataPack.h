@@ -56,7 +56,7 @@ private:
     std::vector<std::wstring> FindPackParts(const std::wstring& basePath);
     bool LoadPackPart(const std::wstring& path, size_t partIndex);
 
-    bool EnsureWindow(PackPart& part, uint64_t offset, size_t needed);
+    bool EnsureWindow(PackPart& part, uint64_t offset, size_t needed) const;
     const uint8_t* GetDataAtOffset(uint64_t offset, size_t& outSize);
     size_t ReadBytes(uint64_t offset, void* dest, size_t count);
 

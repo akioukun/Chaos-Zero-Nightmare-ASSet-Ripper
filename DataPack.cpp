@@ -92,7 +92,7 @@ std::vector<std::wstring> DataPack::FindPackParts(const std::wstring &basePath)
     return parts;
 }
 
-bool DataPack::EnsureWindow(PackPart &part, uint64_t offset, size_t needed)
+bool DataPack::EnsureWindow(PackPart &part, uint64_t offset, size_t needed) const
 {
     // check if the window already covers the offset
     if (part.view.data &&
@@ -383,36 +383,6 @@ std::vector<uint8_t> DataPack::GetFileData(const Core::FileNode &node)
     return data;
 }
 
-// ---------------------------------------------------------------------------
-// Scan
-// ---------------------------------------------------------------------------
-
-void DataPack::ScanLocalDirectory(std::atomic<float> &progress)
-{
-    std::filesystem::path base_path(pack_path);
-    uint32_t count = 0;
-    uint64_t total = 0;
-
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(base_path, std::filesystem::directory_options::skip_permission_denied))
-    {
-        if (entry.is_regular_file())
-        {
-            std::filesystem::path rel_path = std::filesystem::relative(entry.path(), base_path);
-            std::string rel_path_str = rel_path.u8string();
-            std::replace(rel_path_str.begin(), rel_path_str.end(), '\\', '/');
-
-            uint64_t size = entry.file_size();
-            AddFileToTree(rel_path_str, 0, size);
-            count++;
-            total += size;
-        }
-    }
-
-    parsed_file_count = count;
-    parsed_total_size = total;
-    progress = 1.0f;
-}
-
 void DataPack::Scan(std::atomic<float> &progress)
 {
     auto &root_folder = std::get<Core::FolderInfo>(root_node.data);
@@ -460,9 +430,35 @@ void DataPack::Scan(std::atomic<float> &progress)
     progress = 1.0f;
 }
 
+void DataPack::ScanLocalDirectory(std::atomic<float>& progress)
+{
+    std::filesystem::path base_path(pack_path);
+    uint32_t count = 0;
+    uint64_t total = 0;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(base_path, std::filesystem::directory_options::skip_permission_denied))
+    {
+        if (entry.is_regular_file())
+        {
+            std::filesystem::path rel_path = std::filesystem::relative(entry.path(), base_path);
+            std::string rel_path_str = rel_path.u8string();
+            std::replace(rel_path_str.begin(), rel_path_str.end(), '\\', '/');
+
+            uint64_t size = entry.file_size();
+            AddFileToTree(rel_path_str, 0, size);
+            count++;
+            total += size;
+        }
+    }
+
+    parsed_file_count = count;
+    parsed_total_size = total;
+    progress = 1.0f;
+}
+
 void DataPack::ScanEncrypted(std::atomic<float> &progress)
 {
-    std::array<uint8_t, Core::KEY_SIZE> key;
+    std::array<uint8_t, Core::KEY_SIZE> key{};
     uint32_t current = Core::INITIAL;
     for (size_t i = 0; i < Core::KEY_SIZE; ++i)
     {
@@ -767,7 +763,6 @@ void DataPack::Extract(const Core::FileNode &node, const std::wstring &output_pa
 
 void DataPack::ExtractNode(const Core::FileNode &node, const std::wstring &current_path, std::atomic<uint64_t> &extracted_size, const uint64_t total_size, std::atomic<float> &progress, bool convert_sct_to_png, bool convert_db_to_json)
 {
-
     try
     {
         if (std::holds_alternative<Core::FileInfo>(node.data))
@@ -793,7 +788,7 @@ void DataPack::ExtractNode(const Core::FileNode &node, const std::wstring &curre
                 final_path.replace_extension(".json");
             }
 
-            if (is_scsp && convert_db_to_json)
+            if (is_scsp)
             {
                 final_path.replace_extension(".json");
             }
@@ -881,7 +876,7 @@ void DataPack::ExtractNode(const Core::FileNode &node, const std::wstring &curre
                     }
                 }
 
-                if (is_scsp && convert_db_to_json)
+                if (is_scsp)
                 {
                     try
                     {
