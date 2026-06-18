@@ -45,27 +45,29 @@
 
 using json = nlohmann::ordered_json;
 
-static std::unique_ptr<DataPack> data_pack = nullptr;
-static Core::FileNode const *selected_node = nullptr;
-static std::unordered_set<const Core::FileNode *> selected_file_nodes;
-static std::future<void> task_future;
-static std::atomic<float> task_progress = 0.0f;
-static std::atomic<bool> is_task_running = false;
-static std::atomic<bool> is_scan_complete = false;
-static std::string status_text = "Select a data.pack file to begin.";
-static std::unordered_set<const Core::FileNode *> expanded_folders;
-static char search_buffer[256] = {0};
-static std::string search_query = "";
-static std::vector<const Core::FileNode*> visible_nodes;
+struct FileBrowserState
+{
+    std::unique_ptr<DataPack> data_pack;
+    const Core::FileNode *selected_node = nullptr;
+    const Core::FileNode *last_clicked_node = nullptr;
+    std::unordered_set<const Core::FileNode *> selected_nodes;
+    std::unordered_set<const Core::FileNode *> expanded_folders;
+    std::vector<const Core::FileNode *> visible_nodes;
+    char search_buffer[256] = {};
+    std::string search_query;
+    Uint32 last_click_time = 0;
+    int click_count = 0;
+};
 
-static GLuint preview_texture = 0;
-static int preview_width = 0;
-static int preview_height = 0;
-static bool has_preview = false;
-static std::string preview_error = "";
-static std::string preview_atlas_data = "";
-static std::string full_atlas_data = "";
-static std::string preview_json_data = "";
+struct TaskState
+{
+    std::future<void> future;
+    std::atomic<float> progress = 0.f;
+    std::atomic<bool> running = false;
+    std::atomic<bool> scan_complete = false;
+    std::string status = "Select a data.pack file to begin.";
+};
+
 enum class PreviewMode
 {
     None,
@@ -74,117 +76,153 @@ enum class PreviewMode
     JSON,
     Text
 };
-static PreviewMode current_preview_mode = PreviewMode::None;
+struct PreviewState
+{
+    GLuint texture = 0;
+    int width = 0, height = 0;
+    bool has_preview = false;
+    std::string error, atlas_preview, atlas_full, json_preview;
+    PreviewMode mode = PreviewMode::None;
+};
 
-static bool atlas_wrap_lines = true;
-static bool show_atlas_window = false;
-static char atlas_filter[256] = {0};
-static std::vector<char> atlas_text_buf;
+struct AtlasViewerState
+{
+    bool show_window = false;
+    bool wrap_lines = true;
+    char filter[256] = {};
+    std::vector<char> text_buffer;
+};
 
-static json db_json_data;
-static std::vector<std::string> db_column_names;
-static std::vector<std::vector<std::string>> db_rows;
+struct DatabaseViewerState
+{
+    json json_data;
+    std::vector<std::string> column_names;
+    std::vector<std::vector<std::string>> rows;
+    std::string filename;
+};
 
-static std::string db_filename = "";
+struct ImageWindowState
+{
+    SDL_Window *window = nullptr;
+    SDL_Renderer *renderer = nullptr;
+    SDL_Texture *texture = nullptr;
+    int width = 0, height = 0;
+    std::string title;
+};
 
-static SDL_Window *image_window = nullptr;
-static SDL_Renderer *image_renderer = nullptr;
-static SDL_Texture *image_window_texture = nullptr;
-static int image_window_width = 0;
-static int image_window_height = 0;
-static std::string image_window_title = "";
+struct ContextMenuState
+{
+    bool visible = false;
+    const Core::FileNode *node = nullptr;
+    struct nk_vec2 position = {0, 0};
+};
 
-static bool show_context_menu = false;
-static const Core::FileNode *context_menu_node = nullptr;
-static struct nk_vec2 context_menu_pos = {0, 0};
-static bool show_export_options_window = false;
-static nk_bool export_sct_as_png = nk_true;
-static bool export_convert_all_sct = false;
-static nk_bool export_db_as_json = nk_true;
-static nk_bool enable_open_folder = nk_false;
+struct CommonState
+{
+    bool show_options = false;
+    nk_bool export_sct_as_png = nk_true;
+    bool convert_all_sct = false;
+    nk_bool export_db_as_json = nk_true;
+    nk_bool enable_open_folder = nk_false;
+    bool show_success_popup = false;
+    std::string success_message;
+};
 
-static bool show_credits_window = false;
-static bool show_export_success = false;
-static std::string export_success_msg = "";
+struct CreditsState
+{
+    bool show_window = false;
+};
 
-static Uint32 last_click_time = 0;
-static const Core::FileNode *last_clicked_node = nullptr;
-static int click_count = 0;
+struct SCTPreviewState
+{
+    bool show_window = false;
+    GLuint texture = 0;
+    int width = 0, height = 0;
+    std::string filename;
+};
 
-static bool show_sct_preview_window = false;
-static GLuint sct_preview_texture = 0;
-static int sct_preview_width = 0;
-static int sct_preview_height = 0;
-static std::string sct_preview_filename = "";
+struct SpineViewerState
+{
+    SpineDictionary dictionary;
+    bool show_window = false;
+    char search_buffer[256] = {};
+    std::string search_query;
+    int selected_index = -1;
+    std::future<void> build_future;
+    std::atomic<bool> building = false;
+    std::unique_ptr<SpineViewer> viewer;
+    int selected_animation = 0, selected_skin = 0;
+    float speed = 1.f, zoom = 1.f;
+    bool playing = true, flip_x = false, flip_y = false;
+    Uint64 last_tick = 0;
+    std::unordered_set<std::string> expanded_categories, collapsed_bones;
+    std::vector<int> visible_indices;
+    bool edit_mode = false;
+    float scale_max = 1000.f;
+    std::string selected_bone;
+    char scale_max_buffer[16] = "1000";
+    bool scroll_to_bone = false;
+};
 
-// Spine viewer state
-static SpineDictionary spine_dictionary;
-static bool show_spine_viewer = false;
-static char spine_search_buffer[256] = {0};
-static std::string spine_search_query = "";
-static int spine_selected_index = -1;
-static std::future<void> spine_build_future;
-static std::atomic<bool> spine_building = false;
-static std::unique_ptr<SpineViewer> active_spine_viewer;
-static int spine_anim_selected = 0;
-static int spine_skin_selected = 0;
-static float spine_speed = 1.0f;
-static bool spine_playing = true;
-static bool spine_flip_x = false;
-static bool spine_flip_y = false;
-static float spine_zoom = 1.0f;
-static Uint64 spine_last_tick = 0;
-static std::unordered_set<std::string> spine_expanded_categories;
-static std::vector<int> spine_visible_indices; // built during list render
-static bool spine_edit_mode = false;
-static float spine_scale_max = 1000.0f;
-static std::string spine_selected_bone = "";
-static char spine_scale_max_buf[16] = "1000";
-static bool spine_scroll_to_bone = false;
-static std::unordered_set<std::string> spine_collapsed_bones; // folded in list only, not hidden
-
-// Diff viewer state
-enum class DiffStatus {
+enum class DiffStatus
+{
     Unchanged,
     Added,
     Modified,
     Removed
 };
-
-struct DiffNode {
-    std::string name;
-    std::string full_path;
-    bool is_folder;
-    uint64_t size;
+struct DiffNode
+{
+    std::string name, full_path;
+    bool is_folder = false;
+    uint64_t size = 0;
     std::string format;
-    DiffStatus status;
+    DiffStatus status = DiffStatus::Unchanged;
     std::vector<std::unique_ptr<DiffNode>> children;
 };
+struct DiffViewerState
+{
+    bool show_tree = false;
+    std::unique_ptr<DiffNode> root;
+    std::unordered_set<const DiffNode *> expanded_folders, selected_nodes;
+    const DiffNode *selected_node = nullptr;
+    const DiffNode *last_clicked_node = nullptr;
+    std::vector<const DiffNode *> visible_nodes;
+};
 
-static bool show_diff_tree = false;
-static std::unique_ptr<DiffNode> diff_root;
-static std::unordered_set<const DiffNode*> expanded_diff_folders;
-static const DiffNode* selected_diff_node = nullptr;
-static std::vector<const DiffNode*> visible_diff_nodes;
-static std::unordered_set<const DiffNode*> selected_diff_nodes;
-static const DiffNode *last_clicked_diff_node = nullptr;
+struct AppState
+{
+    FileBrowserState browser;
+    TaskState tasks;
+    PreviewState preview;
+    AtlasViewerState atlas;
+    DatabaseViewerState database;
+    ImageWindowState image;
+    ContextMenuState context_menu;
+    CommonState common;
+    CreditsState credits;
+    SCTPreviewState sct;
+    SpineViewerState spine;
+    DiffViewerState diff;
+};
 
+static AppState g_state;
 
 static void save_options_to_ini()
 {
     RipperOptions options;
-    options.exportSctAsPng = (export_sct_as_png != nk_false);
-    options.exportDbAsJson = (export_db_as_json != nk_false);
-    options.enableOpenFolder = (enable_open_folder != nk_false);
+    options.exportSctAsPng = (g_state.common.export_sct_as_png != nk_false);
+    options.exportDbAsJson = (g_state.common.export_db_as_json != nk_false);
+    options.enableOpenFolder = (g_state.common.enable_open_folder != nk_false);
     SaveRipperOptions(options);
 }
 
 static void load_options_from_ini()
 {
     const RipperOptions options = LoadRipperOptions();
-    export_sct_as_png = options.exportSctAsPng ? nk_true : nk_false;
-    export_db_as_json = options.exportDbAsJson ? nk_true : nk_false;
-    enable_open_folder = options.enableOpenFolder ? nk_true : nk_false;
+    g_state.common.export_sct_as_png = options.exportSctAsPng ? nk_true : nk_false;
+    g_state.common.export_db_as_json = options.exportDbAsJson ? nk_true : nk_false;
+    g_state.common.enable_open_folder = options.enableOpenFolder ? nk_true : nk_false;
 }
 
 int get_file_count(const Core::FileNode &node)
@@ -334,20 +372,20 @@ void load_json_preview(const Core::FileNode &node, const std::string &content = 
 {
     try
     {
-        preview_json_data = "";
+        g_state.preview.json_preview = "";
         std::string json_content = content;
 
         if (json_content.empty())
         {
-            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             if (!file_data.empty())
             {
                 json_content = std::string(file_data.begin(), file_data.end());
             }
             else
             {
-                preview_error = "Failed to read JSON file";
-                current_preview_mode = PreviewMode::None;
+                g_state.preview.error = "Failed to read JSON file";
+                g_state.preview.mode = PreviewMode::None;
                 return;
             }
         }
@@ -355,18 +393,18 @@ void load_json_preview(const Core::FileNode &node, const std::string &content = 
         try
         {
             json parsed = json::parse(json_content);
-            preview_json_data = parsed.dump(2);
+            g_state.preview.json_preview = parsed.dump(2);
         }
         catch (...)
         {
-            preview_json_data = json_content;
+            g_state.preview.json_preview = json_content;
         }
-        current_preview_mode = PreviewMode::JSON;
+        g_state.preview.mode = PreviewMode::JSON;
     }
     catch (const std::exception &e)
     {
-        preview_error = "Error loading JSON: " + std::string(e.what());
-        current_preview_mode = PreviewMode::None;
+        g_state.preview.error = "Error loading JSON: " + std::string(e.what());
+        g_state.preview.mode = PreviewMode::None;
     }
 }
 
@@ -374,61 +412,61 @@ void load_db_preview(const Core::FileNode &node)
 {
     try
     {
-        db_column_names.clear();
-        db_rows.clear();
-        db_json_data.clear();
-        preview_json_data = "";
-        current_preview_mode = PreviewMode::None;
+        g_state.database.column_names.clear();
+        g_state.database.rows.clear();
+        g_state.database.json_data.clear();
+        g_state.preview.json_preview = "";
+        g_state.preview.mode = PreviewMode::None;
 
-        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
         if (file_data.empty())
         {
-            preview_error = "Failed to read DB file";
+            g_state.preview.error = "Failed to read DB file";
             return;
         }
 
         std::string json_str = DBParser::ConvertToJson(file_data);
         if (json_str.empty() || json_str == "{}")
         {
-            preview_json_data = json_str;
-            current_preview_mode = PreviewMode::JSON;
+            g_state.preview.json_preview = json_str;
+            g_state.preview.mode = PreviewMode::JSON;
             return;
         }
 
         try
         {
-            db_json_data = json::parse(json_str);
+            g_state.database.json_data = json::parse(json_str);
         }
         catch (const json::parse_error &e)
         {
-            preview_json_data = json_str;
-            current_preview_mode = PreviewMode::JSON;
+            g_state.preview.json_preview = json_str;
+            g_state.preview.mode = PreviewMode::JSON;
             return;
         }
 
-        db_filename = node.name;
+        g_state.database.filename = node.name;
 
-        if (!db_json_data.is_array() || db_json_data.empty())
+        if (!g_state.database.json_data.is_array() || g_state.database.json_data.empty())
         {
-            preview_json_data = db_json_data.dump(2);
-            current_preview_mode = PreviewMode::JSON;
+            g_state.preview.json_preview = g_state.database.json_data.dump(2);
+            g_state.preview.mode = PreviewMode::JSON;
             return;
         }
 
         // Check if it looks like a table (elements are objects)
-        if (db_json_data[0].is_object())
+        if (g_state.database.json_data[0].is_object())
         {
-            for (auto &el : db_json_data[0].items())
+            for (auto &el : g_state.database.json_data[0].items())
             {
-                db_column_names.push_back(el.key());
+                g_state.database.column_names.push_back(el.key());
             }
 
-            for (auto &row : db_json_data)
+            for (auto &row : g_state.database.json_data)
             {
                 if (row.is_object())
                 {
                     std::vector<std::string> row_data;
-                    for (const auto &col : db_column_names)
+                    for (const auto &col : g_state.database.column_names)
                     {
                         if (row.contains(col))
                         {
@@ -450,24 +488,24 @@ void load_db_preview(const Core::FileNode &node)
                             row_data.push_back("");
                         }
                     }
-                    db_rows.push_back(row_data);
+                    g_state.database.rows.push_back(row_data);
                 }
             }
-            current_preview_mode = PreviewMode::DB;
+            g_state.preview.mode = PreviewMode::DB;
         }
         else
         {
             // Array of non-objects? Show as JSON
-            preview_json_data = db_json_data.dump(2);
-            current_preview_mode = PreviewMode::JSON;
+            g_state.preview.json_preview = g_state.database.json_data.dump(2);
+            g_state.preview.mode = PreviewMode::JSON;
         }
 
-        preview_error = "";
+        g_state.preview.error = "";
     }
     catch (const std::exception &e)
     {
-        preview_error = "DB parsing error: " + std::string(e.what());
-        current_preview_mode = PreviewMode::JSON;
+        g_state.preview.error = "DB parsing error: " + std::string(e.what());
+        g_state.preview.mode = PreviewMode::JSON;
     }
 }
 
@@ -475,13 +513,13 @@ void load_scsp_preview(const Core::FileNode &node)
 {
     try
     {
-        preview_json_data = "";
-        current_preview_mode = PreviewMode::None;
+        g_state.preview.json_preview = "";
+        g_state.preview.mode = PreviewMode::None;
 
-        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
         if (file_data.empty())
         {
-            preview_error = "Failed to read SCSP file";
+            g_state.preview.error = "Failed to read SCSP file";
             return;
         }
 
@@ -491,25 +529,25 @@ void load_scsp_preview(const Core::FileNode &node)
             try
             {
                 json parsed = json::parse(json_str);
-                preview_json_data = parsed.dump(2);
+                g_state.preview.json_preview = parsed.dump(2);
             }
             catch (...)
             {
-                preview_json_data = json_str;
+                g_state.preview.json_preview = json_str;
             }
-            current_preview_mode = PreviewMode::JSON;
+            g_state.preview.mode = PreviewMode::JSON;
         }
         else
         {
-            preview_error = "Failed to parse SCSP file";
+            g_state.preview.error = "Failed to parse SCSP file";
         }
 
-        preview_error = "";
+        g_state.preview.error = "";
     }
     catch (const std::exception &e)
     {
-        preview_error = "SCSP parsing error: " + std::string(e.what());
-        current_preview_mode = PreviewMode::None;
+        g_state.preview.error = "SCSP parsing error: " + std::string(e.what());
+        g_state.preview.mode = PreviewMode::None;
     }
 }
 
@@ -517,55 +555,55 @@ void load_text_preview(const Core::FileNode &node)
 {
     try
     {
-        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
         if (file_data.empty())
         {
-            preview_atlas_data = "Failed to read file";
-            full_atlas_data = "";
-            current_preview_mode = PreviewMode::Text;
+            g_state.preview.atlas_preview = "Failed to read file";
+            g_state.preview.atlas_full = "";
+            g_state.preview.mode = PreviewMode::Text;
             return;
         }
-        full_atlas_data = std::string(file_data.begin(), file_data.end());
-        preview_atlas_data = full_atlas_data;
-        atlas_text_buf.assign(preview_atlas_data.begin(), preview_atlas_data.end());
-        atlas_text_buf.push_back('\0');
-        if (preview_atlas_data.length() > 20000)
+        g_state.preview.atlas_full = std::string(file_data.begin(), file_data.end());
+        g_state.preview.atlas_preview = g_state.preview.atlas_full;
+        g_state.atlas.text_buffer.assign(g_state.preview.atlas_preview.begin(), g_state.preview.atlas_preview.end());
+        g_state.atlas.text_buffer.push_back('\0');
+        if (g_state.preview.atlas_preview.length() > 20000)
         {
-            preview_atlas_data = preview_atlas_data.substr(0, 20000) + "\n\n... (truncated)";
+            g_state.preview.atlas_preview = g_state.preview.atlas_preview.substr(0, 20000) + "\n\n... (truncated)";
         }
-        current_preview_mode = PreviewMode::Text;
+        g_state.preview.mode = PreviewMode::Text;
     }
     catch (const std::exception &e)
     {
-        preview_atlas_data = "Error loading text: " + std::string(e.what());
-        full_atlas_data = "";
-        current_preview_mode = PreviewMode::Text;
+        g_state.preview.atlas_preview = "Error loading text: " + std::string(e.what());
+        g_state.preview.atlas_full = "";
+        g_state.preview.mode = PreviewMode::Text;
     }
 }
 
 void load_image_preview(const Core::FileNode &node)
 {
-    if (preview_texture)
+    if (g_state.preview.texture != 0)
     {
-        glDeleteTextures(1, &preview_texture);
-        preview_texture = 0;
+        glDeleteTextures(1, &g_state.preview.texture);
+        g_state.preview.texture = 0;
     }
-    has_preview = false;
-    preview_width = 0;
-    preview_height = 0;
-    preview_error = "";
-    preview_atlas_data = "";
-    full_atlas_data = "";
-    preview_json_data = "";
-    db_column_names.clear();
-    db_rows.clear();
-    current_preview_mode = PreviewMode::None;
+    g_state.preview.has_preview = false;
+    g_state.preview.width = 0;
+    g_state.preview.height = 0;
+    g_state.preview.error = "";
+    g_state.preview.atlas_preview = "";
+    g_state.preview.atlas_full = "";
+    g_state.preview.json_preview = "";
+    g_state.database.column_names.clear();
+    g_state.database.rows.clear();
+    g_state.preview.mode = PreviewMode::None;
 
     try
     {
         if (!std::holds_alternative<Core::FileInfo>(node.data))
         {
-            preview_error = "Not a file";
+            g_state.preview.error = "Not a file";
             return;
         }
         const auto &info = std::get<Core::FileInfo>(node.data);
@@ -596,20 +634,20 @@ void load_image_preview(const Core::FileNode &node)
 
         if (is_animated_webp(info.format))
         {
-            preview_error = "Animated WebP preview not supported. Use 'Export' to save the file.";
+            g_state.preview.error = "Animated WebP preview not supported. Use 'Export' to save the file.";
             return;
         }
 
         if (!is_previewable_format(info.format))
         {
-            preview_error = "Preview not available for " + info.format + " files";
+            g_state.preview.error = "Preview not available for " + info.format + " files";
             return;
         }
 
-        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
         if (file_data.empty())
         {
-            preview_error = "Failed to read file data";
+            g_state.preview.error = "Failed to read file data";
             return;
         }
 
@@ -626,24 +664,24 @@ void load_image_preview(const Core::FileNode &node)
 
                 if (png_data.empty())
                 {
-                    preview_error = "Failed to convert SCT/SCT2 file";
-                    current_preview_mode = PreviewMode::None;
+                    g_state.preview.error = "Failed to convert SCT/SCT2 file";
+                    g_state.preview.mode = PreviewMode::None;
                     return;
                 }
 
                 SDL_RWops *rw = SDL_RWFromMem(png_data.data(), (int)png_data.size());
                 if (!rw)
                 {
-                    preview_error = "Failed to create memory stream for SCT";
-                    current_preview_mode = PreviewMode::None;
+                    g_state.preview.error = "Failed to create memory stream for SCT";
+                    g_state.preview.mode = PreviewMode::None;
                     return;
                 }
 
                 SDL_Surface *surface = IMG_Load_RW(rw, 1);
                 if (!surface)
                 {
-                    preview_error = "Failed to decode converted SCT image: " + std::string(IMG_GetError());
-                    current_preview_mode = PreviewMode::None;
+                    g_state.preview.error = "Failed to decode converted SCT image: " + std::string(IMG_GetError());
+                    g_state.preview.mode = PreviewMode::None;
                     return;
                 }
 
@@ -652,8 +690,8 @@ void load_image_preview(const Core::FileNode &node)
             }
             catch (const std::exception &e)
             {
-                preview_error = "SCT parsing error: " + std::string(e.what());
-                current_preview_mode = PreviewMode::None;
+                g_state.preview.error = "SCT parsing error: " + std::string(e.what());
+                g_state.preview.mode = PreviewMode::None;
                 return;
             }
         }
@@ -662,16 +700,16 @@ void load_image_preview(const Core::FileNode &node)
             SDL_RWops *rw = SDL_RWFromMem(file_data.data(), (int)file_data.size());
             if (!rw)
             {
-                preview_error = "Failed to create memory stream";
-                current_preview_mode = PreviewMode::None;
+                g_state.preview.error = "Failed to create memory stream";
+                g_state.preview.mode = PreviewMode::None;
                 return;
             }
 
             SDL_Surface *surface = IMG_Load_RW(rw, 1);
             if (!surface)
             {
-                preview_error = "Failed to decode image: " + std::string(IMG_GetError());
-                current_preview_mode = PreviewMode::None;
+                g_state.preview.error = "Failed to decode image: " + std::string(IMG_GetError());
+                g_state.preview.mode = PreviewMode::None;
                 return;
             }
 
@@ -681,35 +719,35 @@ void load_image_preview(const Core::FileNode &node)
 
         if (!rgba_surface)
         {
-            preview_error = "Failed to convert image format";
-            current_preview_mode = PreviewMode::None;
+            g_state.preview.error = "Failed to convert image format";
+            g_state.preview.mode = PreviewMode::None;
             return;
         }
 
-        preview_width = rgba_surface->w;
-        preview_height = rgba_surface->h;
+        g_state.preview.width = rgba_surface->w;
+        g_state.preview.height = rgba_surface->h;
 
-        glGenTextures(1, &preview_texture);
-        glBindTexture(GL_TEXTURE_2D, preview_texture);
+        glGenTextures(1, &g_state.preview.texture);
+        glBindTexture(GL_TEXTURE_2D, g_state.preview.texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, preview_width, preview_height, 0,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_state.preview.width, g_state.preview.height, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rgba_surface->pixels);
         SDL_FreeSurface(rgba_surface);
-        has_preview = true;
-        current_preview_mode = PreviewMode::Image;
+        g_state.preview.has_preview = true;
+        g_state.preview.mode = PreviewMode::Image;
     }
     catch (const std::exception &e)
     {
-        preview_error = "Error: " + std::string(e.what());
-        has_preview = false;
-        current_preview_mode = PreviewMode::None;
+        g_state.preview.error = "Error: " + std::string(e.what());
+        g_state.preview.has_preview = false;
+        g_state.preview.mode = PreviewMode::None;
     }
     catch (...)
     {
-        preview_error = "Unknown error occurred";
-        has_preview = false;
-        current_preview_mode = PreviewMode::None;
+        g_state.preview.error = "Unknown error occurred";
+        g_state.preview.has_preview = false;
+        g_state.preview.mode = PreviewMode::None;
     }
 }
 
@@ -730,7 +768,7 @@ void export_db_as_json_file(const Core::FileNode &node)
 
         if (!f.result().empty())
         {
-            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::string json_str = DBParser::ConvertToJson(file_data);
 
             if (!json_str.empty() && json_str != "{}")
@@ -744,7 +782,7 @@ void export_db_as_json_file(const Core::FileNode &node)
                     std::ofstream out(f.result());
                     out << formatted_json;
                     out.close();
-                    status_text = "Exported DB to JSON: " + f.result();
+                    g_state.tasks.status = "Exported DB to JSON: " + f.result();
                 }
                 catch (const json::parse_error &e)
                 {
@@ -752,18 +790,18 @@ void export_db_as_json_file(const Core::FileNode &node)
                     std::ofstream out(f.result());
                     out << json_str;
                     out.close();
-                    status_text = "Exported DB to JSON (unformatted): " + f.result();
+                    g_state.tasks.status = "Exported DB to JSON (unformatted): " + f.result();
                 }
             }
             else
             {
-                status_text = "Failed to convert DB to JSON";
+                g_state.tasks.status = "Failed to convert DB to JSON";
             }
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Export error: " + std::string(e.what());
+        g_state.tasks.status = "Export error: " + std::string(e.what());
     }
 }
 
@@ -784,7 +822,7 @@ void export_scsp_as_json_file(const Core::FileNode &node)
 
         if (!f.result().empty())
         {
-            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::string json_str = SCSPParser::ConvertSCSPToJson(file_data);
 
             if (!json_str.empty())
@@ -797,25 +835,25 @@ void export_scsp_as_json_file(const Core::FileNode &node)
                     std::ofstream out(f.result());
                     out << formatted_json;
                     out.close();
-                    status_text = "Exported SCSP to JSON: " + f.result();
+                    g_state.tasks.status = "Exported SCSP to JSON: " + f.result();
                 }
                 catch (const json::parse_error &e)
                 {
                     std::ofstream out(f.result());
                     out << json_str;
                     out.close();
-                    status_text = "Exported SCSP to JSON (unformatted): " + f.result();
+                    g_state.tasks.status = "Exported SCSP to JSON (unformatted): " + f.result();
                 }
             }
             else
             {
-                status_text = "Failed to convert SCSP to JSON";
+                g_state.tasks.status = "Failed to convert SCSP to JSON";
             }
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Export error: " + std::string(e.what());
+        g_state.tasks.status = "Export error: " + std::string(e.what());
     }
 }
 
@@ -836,22 +874,22 @@ void export_json_file(const Core::FileNode &node)
 
         if (!f.result().empty())
         {
-            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             if (file_data.empty())
             {
-                status_text = "Failed to read JSON file";
+                g_state.tasks.status = "Failed to read JSON file";
                 return;
             }
 
             std::ofstream out(f.result(), std::ios::binary);
             out.write(reinterpret_cast<const char *>(file_data.data()), file_data.size());
             out.close();
-            status_text = "Exported JSON: " + f.result();
+            g_state.tasks.status = "Exported JSON: " + f.result();
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Export error: " + std::string(e.what());
+        g_state.tasks.status = "Export error: " + std::string(e.what());
     }
 }
 
@@ -859,23 +897,23 @@ void open_image_preview_window(const Core::FileNode &node)
 {
     try
     {
-        if (image_window)
+        if (g_state.image.window)
         {
-            if (image_window_texture)
+            if (g_state.image.texture)
             {
-                SDL_DestroyTexture(image_window_texture);
-                image_window_texture = nullptr;
+                SDL_DestroyTexture(g_state.image.texture);
+                g_state.image.texture = nullptr;
             }
-            if (image_renderer)
+            if (g_state.image.renderer)
             {
-                SDL_DestroyRenderer(image_renderer);
-                image_renderer = nullptr;
+                SDL_DestroyRenderer(g_state.image.renderer);
+                g_state.image.renderer = nullptr;
             }
-            SDL_DestroyWindow(image_window);
-            image_window = nullptr;
+            SDL_DestroyWindow(g_state.image.window);
+            g_state.image.window = nullptr;
         }
 
-        std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
         const auto &info = std::get<Core::FileInfo>(node.data);
 
         SDL_Surface *surface = nullptr;
@@ -885,7 +923,7 @@ void open_image_preview_window(const Core::FileNode &node)
             std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data, false);
             if (png_data.empty())
             {
-                status_text = "Failed to convert SCT for preview window";
+                g_state.tasks.status = "Failed to convert SCT for preview window";
                 return;
             }
             SDL_RWops *rw = SDL_RWFromMem(png_data.data(), (int)png_data.size());
@@ -899,7 +937,7 @@ void open_image_preview_window(const Core::FileNode &node)
 
         if (!surface)
         {
-            status_text = "Failed to load image for preview window";
+            g_state.tasks.status = "Failed to load image for preview window";
             return;
         }
 
@@ -914,73 +952,73 @@ void open_image_preview_window(const Core::FileNode &node)
         int max_width = (int)(screen_width * 0.9f);
         int max_height = (int)(screen_height * 0.9f);
 
-        image_window_width = original_width;
-        image_window_height = original_height;
+        g_state.image.width = original_width;
+        g_state.image.height = original_height;
 
-        if (image_window_width > max_width || image_window_height > max_height)
+        if (g_state.image.width > max_width || g_state.image.height > max_height)
         {
             float scale_w = (float)max_width / original_width;
             float scale_h = (float)max_height / original_height;
             float scale = (scale_w < scale_h) ? scale_w : scale_h;
 
-            image_window_width = (int)(original_width * scale);
-            image_window_height = (int)(original_height * scale);
+            g_state.image.width = (int)(original_width * scale);
+            g_state.image.height = (int)(original_height * scale);
         }
 
-        image_window_title = node.name + " (" + std::to_string(original_width) + "x" + std::to_string(original_height) + ")";
+        g_state.image.title = node.name + " (" + std::to_string(original_width) + "x" + std::to_string(original_height) + ")";
 
-        image_window = SDL_CreateWindow(
-            image_window_title.c_str(),
+        g_state.image.window = SDL_CreateWindow(
+            g_state.image.title.c_str(),
             SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED,
-            image_window_width,
-            image_window_height,
+            g_state.image.width,
+            g_state.image.height,
             SDL_WINDOW_SHOWN);
 
-        if (!image_window)
+        if (!g_state.image.window)
         {
             SDL_FreeSurface(surface);
-            status_text = "Failed to create preview window";
+            g_state.tasks.status = "Failed to create preview window";
             return;
         }
 
-        image_renderer = SDL_CreateRenderer(image_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!image_renderer)
+        g_state.image.renderer = SDL_CreateRenderer(g_state.image.window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if (!g_state.image.renderer)
         {
             SDL_FreeSurface(surface);
-            SDL_DestroyWindow(image_window);
-            image_window = nullptr;
-            status_text = "Failed to create renderer";
+            SDL_DestroyWindow(g_state.image.window);
+            g_state.image.window = nullptr;
+            g_state.tasks.status = "Failed to create renderer";
             return;
         }
 
-        image_window_texture = SDL_CreateTextureFromSurface(image_renderer, surface);
+        g_state.image.texture = SDL_CreateTextureFromSurface(g_state.image.renderer, surface);
         SDL_FreeSurface(surface);
 
-        if (!image_window_texture)
+        if (!g_state.image.texture)
         {
-            SDL_DestroyRenderer(image_renderer);
-            image_renderer = nullptr;
-            SDL_DestroyWindow(image_window);
-            image_window = nullptr;
-            status_text = "Failed to create texture";
+            SDL_DestroyRenderer(g_state.image.renderer);
+            g_state.image.renderer = nullptr;
+            SDL_DestroyWindow(g_state.image.window);
+            g_state.image.window = nullptr;
+            g_state.tasks.status = "Failed to create texture";
             return;
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Error opening image window: " + std::string(e.what());
+        g_state.tasks.status = "Error opening image window: " + std::string(e.what());
     }
 }
 
 void render_image_window()
 {
-    if (!image_window || !image_renderer || !image_window_texture)
+    if (!g_state.image.window || !g_state.image.renderer || !g_state.image.texture)
         return;
 
-    SDL_RenderClear(image_renderer);
-    SDL_RenderCopy(image_renderer, image_window_texture, nullptr, nullptr);
-    SDL_RenderPresent(image_renderer);
+    SDL_RenderClear(g_state.image.renderer);
+    SDL_RenderCopy(g_state.image.renderer, g_state.image.texture, nullptr, nullptr);
+    SDL_RenderPresent(g_state.image.renderer);
 }
 
 void export_file_as_png(const Core::FileNode &node)
@@ -1002,7 +1040,7 @@ void export_file_as_png(const Core::FileNode &node)
 
         if (!f.result().empty())
         {
-            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::vector<uint8_t> png_data;
 
             if (is_sct_format(info.format))
@@ -1019,13 +1057,13 @@ void export_file_as_png(const Core::FileNode &node)
                 std::ofstream out(f.result(), std::ios::binary);
                 out.write((const char *)png_data.data(), png_data.size());
                 out.close();
-                status_text = "Exported to: " + f.result();
+                g_state.tasks.status = "Exported to: " + f.result();
             }
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Export error: " + std::string(e.what());
+        g_state.tasks.status = "Export error: " + std::string(e.what());
     }
 }
 
@@ -1038,16 +1076,16 @@ void export_file_as_sct(const Core::FileNode &node)
 
         if (!f.result().empty())
         {
-            std::vector<uint8_t> file_data = data_pack->GetFileData(node);
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::ofstream out(f.result(), std::ios::binary);
             out.write((const char *)file_data.data(), file_data.size());
             out.close();
-            status_text = "Exported to: " + f.result();
+            g_state.tasks.status = "Exported to: " + f.result();
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Export error: " + std::string(e.what());
+        g_state.tasks.status = "Export error: " + std::string(e.what());
     }
 }
 
@@ -1055,49 +1093,49 @@ void handle_node_click(const Core::FileNode *node, bool is_folder)
 {
     bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
     Uint32 current_time = SDL_GetTicks();
-    Uint32 time_diff = current_time - last_click_time;
+    Uint32 time_diff = current_time - g_state.browser.last_click_time;
 
-    if (time_diff < 250 && node == last_clicked_node)
+    if (time_diff < 250 && node == g_state.browser.last_clicked_node)
     {
-        last_click_time = current_time;
+        g_state.browser.last_click_time = current_time;
         return;
     }
 
-    click_count = 0;
+    g_state.browser.click_count = 0;
 
     if (ctrl_pressed)
     {
-        if (selected_file_nodes.find(node) != selected_file_nodes.end())
+        if (g_state.browser.selected_nodes.find(node) != g_state.browser.selected_nodes.end())
         {
-            selected_file_nodes.erase(node);
+            g_state.browser.selected_nodes.erase(node);
         }
         else
         {
-            selected_file_nodes.insert(node);
+            g_state.browser.selected_nodes.insert(node);
         }
 
-        selected_node = node;
+        g_state.browser.selected_node = node;
         if (!is_folder)
         {
             load_image_preview(*node);
         }
         else
         {
-            has_preview = false;
-            preview_error = "";
-            preview_atlas_data = "";
-            preview_json_data = "";
-            full_atlas_data = "";
-            db_column_names.clear();
-            db_rows.clear();
-            current_preview_mode = PreviewMode::None;
+            g_state.preview.has_preview = false;
+            g_state.preview.error = "";
+            g_state.preview.atlas_preview = "";
+            g_state.preview.json_preview = "";
+            g_state.preview.atlas_full = "";
+            g_state.database.column_names.clear();
+            g_state.database.rows.clear();
+            g_state.preview.mode = PreviewMode::None;
         }
     }
     else
     {
-        selected_file_nodes.clear();
-        selected_file_nodes.insert(node);
-        selected_node = node;
+        g_state.browser.selected_nodes.clear();
+        g_state.browser.selected_nodes.insert(node);
+        g_state.browser.selected_node = node;
 
         if (!is_folder)
         {
@@ -1105,26 +1143,26 @@ void handle_node_click(const Core::FileNode *node, bool is_folder)
         }
         else
         {
-            has_preview = false;
-            preview_error = "";
-            preview_atlas_data = "";
-            preview_json_data = "";
-            full_atlas_data = "";
-            db_column_names.clear();
-            db_rows.clear();
-            current_preview_mode = PreviewMode::None;
+            g_state.preview.has_preview = false;
+            g_state.preview.error = "";
+            g_state.preview.atlas_preview = "";
+            g_state.preview.json_preview = "";
+            g_state.preview.atlas_full = "";
+            g_state.database.column_names.clear();
+            g_state.database.rows.clear();
+            g_state.preview.mode = PreviewMode::None;
         }
     }
 
-    last_click_time = current_time;
-    last_clicked_node = node;
+    g_state.browser.last_click_time = current_time;
+    g_state.browser.last_clicked_node = node;
 }
 
 void handle_node_right_click(const Core::FileNode *node, struct nk_vec2 pos)
 {
-    context_menu_node = node;
-    context_menu_pos = pos;
-    show_context_menu = true;
+    g_state.context_menu.node = node;
+    g_state.context_menu.position = pos;
+    g_state.context_menu.visible = true;
 }
 
 nlohmann::ordered_json build_file_tree_json(const Core::FileNode &node)
@@ -1167,93 +1205,122 @@ void export_to_json()
             std::ofstream out(f.result());
             if (out.is_open())
             {
-                nlohmann::ordered_json j = build_file_tree_json(data_pack->GetFileTree());
+                nlohmann::ordered_json j = build_file_tree_json(g_state.browser.data_pack->GetFileTree());
                 out << j.dump(2);
                 out.close();
-                export_success_msg = "File map exported successfully!";
-                show_export_success = true;
-                status_text = "Exported to: " + f.result();
+                g_state.common.success_message = "File map exported successfully!";
+                g_state.common.show_success_popup = true;
+                g_state.tasks.status = "Exported to: " + f.result();
             }
         }
     }
     catch (const std::exception &e)
     {
-        status_text = "Export error: " + std::string(e.what());
+        g_state.tasks.status = "Export error: " + std::string(e.what());
     }
 }
 
-static void flatten_old_json(const nlohmann::ordered_json& j, std::map<std::string, uint64_t>& out_map) {
-    if (j.contains("type") && j["type"] == "file") {
-        if (j.contains("path") && j.contains("size")) {
+void flatten_old_json(const nlohmann::ordered_json &j, std::map<std::string, uint64_t> &out_map)
+{
+    if (j.contains("type") && j["type"] == "file")
+    {
+        if (j.contains("path") && j.contains("size"))
+        {
             out_map[j["path"].get<std::string>()] = j["size"].get<uint64_t>();
         }
-    } else if (j.contains("type") && j["type"] == "folder" && j.contains("children")) {
-        for (const auto& child : j["children"]) {
+    }
+    else if (j.contains("type") && j["type"] == "folder" && j.contains("children"))
+    {
+        for (const auto &child : j["children"])
+        {
             flatten_old_json(child, out_map);
         }
     }
 }
 
-static void flatten_new_tree(const Core::FileNode& node, std::map<std::string, uint64_t>& out_map) {
-    if (std::holds_alternative<Core::FileInfo>(node.data)) {
-        const auto& info = std::get<Core::FileInfo>(node.data);
+void flatten_new_tree(const Core::FileNode &node, std::map<std::string, uint64_t> &out_map)
+{
+    if (std::holds_alternative<Core::FileInfo>(node.data))
+    {
+        const auto &info = std::get<Core::FileInfo>(node.data);
         out_map[node.full_path] = info.size;
-    } else {
-        const auto& folder = std::get<Core::FolderInfo>(node.data);
-        for (const auto& child : folder.children) {
+    }
+    else
+    {
+        const auto &folder = std::get<Core::FolderInfo>(node.data);
+        for (const auto &child : folder.children)
+        {
             flatten_new_tree(child, out_map);
         }
     }
 }
 
-static void insert_diff_node(DiffNode* root, const std::string& path, uint64_t size, DiffStatus status) {
+void insert_diff_node(DiffNode *root, const std::string &path, uint64_t size, DiffStatus status)
+{
     std::string norm_path = path;
     std::replace(norm_path.begin(), norm_path.end(), '\\', '/');
 
     std::vector<std::string> parts;
     std::stringstream ss(norm_path);
     std::string part;
-    while(std::getline(ss, part, '/')) {
-        if(!part.empty()) parts.push_back(part);
+    while (std::getline(ss, part, '/'))
+    {
+        if (!part.empty())
+            parts.push_back(part);
     }
 
-    DiffNode* current = root;
+    DiffNode *current = root;
     std::string current_full_path = "";
-    for (size_t i = 0; i < parts.size(); i++) {
-        if (!current_full_path.empty()) current_full_path += "/";
+    for (size_t i = 0; i < parts.size(); i++)
+    {
+        if (!current_full_path.empty())
+            current_full_path += "/";
         current_full_path += parts[i];
 
         bool is_last = (i == parts.size() - 1);
 
-        auto it = std::find_if(current->children.begin(), current->children.end(), [&](const std::unique_ptr<DiffNode>& n) {
-            return n->name == parts[i];
-        });
+        auto it = std::find_if(current->children.begin(), current->children.end(), [&](const std::unique_ptr<DiffNode> &n)
+                               { return n->name == parts[i]; });
 
-        if (it != current->children.end()) {
+        if (it != current->children.end())
+        {
             current = it->get();
-            if (is_last) {
-                if (status != DiffStatus::Unchanged) current->status = status;
-            } else {
-                if (status != DiffStatus::Unchanged && current->status == DiffStatus::Unchanged) {
+            if (is_last)
+            {
+                if (status != DiffStatus::Unchanged)
+                    current->status = status;
+            }
+            else
+            {
+                if (status != DiffStatus::Unchanged && current->status == DiffStatus::Unchanged)
+                {
                     current->status = DiffStatus::Modified;
                 }
             }
-        } else {
+        }
+        else
+        {
             auto new_node = std::make_unique<DiffNode>();
             new_node->name = parts[i];
             new_node->full_path = current_full_path;
             new_node->is_folder = !is_last;
 
-            if (is_last) {
+            if (is_last)
+            {
                 new_node->size = size;
                 new_node->status = status;
                 size_t dot_pos = parts[i].find_last_of('.');
-                if (dot_pos != std::string::npos) {
+                if (dot_pos != std::string::npos)
+                {
                     new_node->format = parts[i].substr(dot_pos);
-                } else {
+                }
+                else
+                {
                     new_node->format = "";
                 }
-            } else {
+            }
+            else
+            {
                 new_node->size = 0;
                 new_node->status = (status == DiffStatus::Unchanged) ? DiffStatus::Unchanged : DiffStatus::Modified;
             }
@@ -1264,76 +1331,89 @@ static void insert_diff_node(DiffNode* root, const std::string& path, uint64_t s
     }
 }
 
-static void build_diff_tree(const nlohmann::ordered_json& old_json) {
+void build_diff_tree(const nlohmann::ordered_json &old_json)
+{
     std::map<std::string, uint64_t> old_map;
     flatten_old_json(old_json, old_map);
 
     std::map<std::string, uint64_t> new_map;
-    if (data_pack) {
-        flatten_new_tree(data_pack->GetFileTree(), new_map);
+    if (g_state.browser.data_pack)
+    {
+        flatten_new_tree(g_state.browser.data_pack->GetFileTree(), new_map);
     }
 
-    diff_root = std::make_unique<DiffNode>();
-    diff_root->name = "Diff Root";
-    diff_root->full_path = "";
-    diff_root->is_folder = true;
-    diff_root->status = DiffStatus::Unchanged;
+    g_state.diff.root = std::make_unique<DiffNode>();
+    g_state.diff.root->name = "Diff Root";
+    g_state.diff.root->full_path = "";
+    g_state.diff.root->is_folder = true;
+    g_state.diff.root->status = DiffStatus::Unchanged;
 
-    for (const auto& kv : old_map) {
-        const std::string& path = kv.first;
+    for (const auto &kv : old_map)
+    {
+        const std::string &path = kv.first;
         uint64_t old_size = kv.second;
 
         auto it = new_map.find(path);
-        if (it == new_map.end()) {
-            insert_diff_node(diff_root.get(), path, old_size, DiffStatus::Removed);
-        } else {
-            if (it->second != old_size) {
-                insert_diff_node(diff_root.get(), path, it->second, DiffStatus::Modified);
-            } else {
-                insert_diff_node(diff_root.get(), path, it->second, DiffStatus::Unchanged);
+        if (it == new_map.end())
+        {
+            insert_diff_node(g_state.diff.root.get(), path, old_size, DiffStatus::Removed);
+        }
+        else
+        {
+            if (it->second != old_size)
+            {
+                insert_diff_node(g_state.diff.root.get(), path, it->second, DiffStatus::Modified);
+            }
+            else
+            {
+                insert_diff_node(g_state.diff.root.get(), path, it->second, DiffStatus::Unchanged);
             }
         }
     }
 
-    for (const auto& kv : new_map) {
-        const std::string& path = kv.first;
+    for (const auto &kv : new_map)
+    {
+        const std::string &path = kv.first;
         uint64_t new_size = kv.second;
-        if (old_map.find(path) == old_map.end()) {
-            insert_diff_node(diff_root.get(), path, new_size, DiffStatus::Added);
+        if (old_map.find(path) == old_map.end())
+        {
+            insert_diff_node(g_state.diff.root.get(), path, new_size, DiffStatus::Added);
         }
     }
 
-    std::function<void(DiffNode*)> sort_tree = [&](DiffNode* node) {
-        std::sort(node->children.begin(), node->children.end(), [](const std::unique_ptr<DiffNode>& a, const std::unique_ptr<DiffNode>& b) {
+    std::function<void(DiffNode *)> sort_tree = [&](DiffNode *node)
+    {
+        std::sort(node->children.begin(), node->children.end(), [](const std::unique_ptr<DiffNode> &a, const std::unique_ptr<DiffNode> &b)
+                  {
             if (a->is_folder != b->is_folder) return a->is_folder > b->is_folder;
-            return a->name < b->name;
-        });
-        for (auto& child : node->children) {
+            return a->name < b->name; });
+        for (auto &child : node->children)
+        {
             sort_tree(child.get());
         }
     };
-    sort_tree(diff_root.get());
+    sort_tree(g_state.diff.root.get());
 
-    show_diff_tree = true;
-    expanded_diff_folders.clear();
-    expanded_diff_folders.insert(diff_root.get());
-    selected_diff_node = nullptr;
-    selected_diff_nodes.clear();
+    g_state.diff.show_tree = true;
+    g_state.diff.expanded_folders.clear();
+    g_state.diff.expanded_folders.insert(g_state.diff.root.get());
+    g_state.diff.selected_node = nullptr;
+    g_state.diff.selected_nodes.clear();
 }
 
-static void set_file_tree_mode()
+void set_file_tree_mode()
 {
-    show_spine_viewer = false;
-    show_diff_tree = false;
+    g_state.spine.show_window = false;
+    g_state.diff.show_tree = false;
 }
 
-static void set_spine_viewer_mode()
+void set_spine_viewer_mode()
 {
-    show_diff_tree = false;
-    show_spine_viewer = true;
+    g_state.diff.show_tree = false;
+    g_state.spine.show_window = true;
 }
 
-static bool load_diff_tree_from_filemap()
+bool load_diff_tree_from_filemap()
 {
     try
     {
@@ -1346,7 +1426,7 @@ static bool load_diff_tree_from_filemap()
         std::ifstream in(f.result()[0]);
         if (!in.is_open())
         {
-            status_text = "Error opening filemap.json for diff.";
+            g_state.tasks.status = "Error opening filemap.json for diff.";
             return false;
         }
 
@@ -1355,19 +1435,19 @@ static bool load_diff_tree_from_filemap()
 
         nlohmann::ordered_json old_json = nlohmann::ordered_json::parse(content);
         build_diff_tree(old_json);
-        status_text = "Diff view generated.";
+        g_state.tasks.status = "Diff view generated.";
         return true;
     }
     catch (const std::exception &e)
     {
-        status_text = "Error parsing JSON: " + std::string(e.what());
+        g_state.tasks.status = "Error parsing JSON: " + std::string(e.what());
         return false;
     }
 }
 
-static bool activate_diff_viewer()
+bool activate_diff_viewer()
 {
-    if (!diff_root)
+    if (!g_state.diff.root)
     {
         if (!load_diff_tree_from_filemap())
         {
@@ -1375,12 +1455,12 @@ static bool activate_diff_viewer()
         }
     }
 
-    show_spine_viewer = false;
-    show_diff_tree = true;
+    g_state.spine.show_window = false;
+    g_state.diff.show_tree = true;
     return true;
 }
 
-static std::string diff_status_label(DiffStatus status)
+std::string diff_status_label(DiffStatus status)
 {
     switch (status)
     {
@@ -1395,71 +1475,74 @@ static std::string diff_status_label(DiffStatus status)
     }
 }
 
-static std::string diff_display_name(const DiffNode &node)
+std::string diff_display_name(const DiffNode &node)
 {
     return diff_status_label(node.status) + node.name;
 }
 
-static void handle_diff_node_click(const DiffNode *node, bool is_folder)
+void handle_diff_node_click(const DiffNode *node, bool is_folder)
 {
     bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
     Uint32 current_time = SDL_GetTicks();
-    Uint32 time_diff = current_time - last_click_time;
+    Uint32 time_diff = current_time - g_state.browser.last_click_time;
 
-    if (time_diff < 250 && node == last_clicked_diff_node)
+    if (time_diff < 250 && node == g_state.diff.last_clicked_node)
     {
-        last_click_time = current_time;
+        g_state.browser.last_click_time = current_time;
         return;
     }
 
     if (ctrl_pressed)
     {
-        if (selected_diff_nodes.find(node) != selected_diff_nodes.end())
+        if (g_state.diff.selected_nodes.find(node) != g_state.diff.selected_nodes.end())
         {
-            selected_diff_nodes.erase(node);
+            g_state.diff.selected_nodes.erase(node);
         }
         else
         {
-            selected_diff_nodes.insert(node);
+            g_state.diff.selected_nodes.insert(node);
         }
-        selected_diff_node = node;
+        g_state.diff.selected_node = node;
     }
     else
     {
-        selected_diff_nodes.clear();
-        selected_diff_nodes.insert(node);
-        selected_diff_node = node;
+        g_state.diff.selected_nodes.clear();
+        g_state.diff.selected_nodes.insert(node);
+        g_state.diff.selected_node = node;
     }
 
-    last_click_time = current_time;
-    last_clicked_diff_node = node;
+    g_state.browser.last_click_time = current_time;
+    g_state.diff.last_clicked_node = node;
 }
 
-static int get_diff_file_count(const DiffNode& node)
+int get_diff_file_count(const DiffNode &node)
 {
-    if (!node.is_folder) return 1;
+    if (!node.is_folder)
+        return 1;
     int count = 0;
-    for (const auto& child : node.children)
+    for (const auto &child : node.children)
     {
         count += get_diff_file_count(*child);
     }
     return count;
 }
 
-static uint64_t get_diff_folder_size(const DiffNode& node)
+uint64_t get_diff_folder_size(const DiffNode &node)
 {
-    if (!node.is_folder) return node.size;
+    if (!node.is_folder)
+        return node.size;
     uint64_t size = 0;
-    for (const auto& child : node.children)
+    for (const auto &child : node.children)
     {
         size += get_diff_folder_size(*child);
     }
     return size;
 }
 
-static bool matches_diff_search(const DiffNode& node, const std::string& query)
+bool matches_diff_search(const DiffNode &node, const std::string &query)
 {
-    if (query.empty()) return true;
+    if (query.empty())
+        return true;
     std::string name_lower = node.name;
     std::string query_lower = query;
     std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
@@ -1467,13 +1550,15 @@ static bool matches_diff_search(const DiffNode& node, const std::string& query)
     return name_lower.find(query_lower) != std::string::npos;
 }
 
-static bool has_matching_diff_child(const DiffNode& node, const std::string& query)
+bool has_matching_diff_child(const DiffNode &node, const std::string &query)
 {
-    if (query.empty()) return true;
-    if (matches_diff_search(node, query)) return true;
+    if (query.empty())
+        return true;
+    if (matches_diff_search(node, query))
+        return true;
     if (node.is_folder)
     {
-        for (const auto& child : node.children)
+        for (const auto &child : node.children)
         {
             if (has_matching_diff_child(*child, query))
                 return true;
@@ -1482,22 +1567,23 @@ static bool has_matching_diff_child(const DiffNode& node, const std::string& que
     return false;
 }
 
-static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
+void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
 {
     try
     {
-        if (!has_matching_diff_child(node, search_query))
+        if (!has_matching_diff_child(node, g_state.browser.search_query))
             return;
 
-        visible_diff_nodes.push_back(&node);
+        g_state.diff.visible_nodes.push_back(&node);
 
         if (node.is_folder)
         {
-            bool is_expanded = expanded_diff_folders.find(&node) != expanded_diff_folders.end();
-            bool is_selected = (selected_diff_nodes.find(&node) != selected_diff_nodes.end()) || (selected_diff_node == &node);
+            bool is_expanded = g_state.diff.expanded_folders.find(&node) != g_state.diff.expanded_folders.end();
+            bool is_selected = (g_state.diff.selected_nodes.find(&node) != g_state.diff.selected_nodes.end()) || (g_state.diff.selected_node == &node);
 
             struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
-            if (is_selected) bg_color = nk_rgb(65, 65, 70);
+            if (is_selected)
+                bg_color = nk_rgb(65, 65, 70);
 
             nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
             nk_layout_row_push(ctx, depth * 16.0f + 10.0f);
@@ -1514,9 +1600,9 @@ static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
             if (nk_button_label_styled(ctx, &expand_style, is_expanded ? "-" : "+"))
             {
                 if (is_expanded)
-                    expanded_diff_folders.erase(&node);
+                    g_state.diff.expanded_folders.erase(&node);
                 else
-                    expanded_diff_folders.insert(&node);
+                    g_state.diff.expanded_folders.insert(&node);
             }
 
             nk_layout_row_push(ctx, 370.0f);
@@ -1526,10 +1612,14 @@ static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
             button_style.active = nk_style_item_color(nk_rgb(70, 70, 80));
 
             struct nk_color text_color = is_selected ? nk_rgb(255, 255, 255) : nk_rgb(220, 220, 220);
-            if (!is_selected) {
-                if (node.status == DiffStatus::Added) text_color = nk_rgb(100, 255, 100);
-                else if (node.status == DiffStatus::Modified) text_color = nk_rgb(255, 200, 50);
-                else if (node.status == DiffStatus::Removed) text_color = nk_rgb(255, 100, 100);
+            if (!is_selected)
+            {
+                if (node.status == DiffStatus::Added)
+                    text_color = nk_rgb(100, 255, 100);
+                else if (node.status == DiffStatus::Modified)
+                    text_color = nk_rgb(255, 200, 50);
+                else if (node.status == DiffStatus::Removed)
+                    text_color = nk_rgb(255, 100, 100);
             }
 
             button_style.text_normal = text_color;
@@ -1560,10 +1650,10 @@ static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
         }
         else
         {
-            if (!matches_diff_search(node, search_query))
+            if (!matches_diff_search(node, g_state.browser.search_query))
                 return;
 
-            bool is_selected = (selected_diff_nodes.find(&node) != selected_diff_nodes.end()) || (selected_diff_node == &node);
+            bool is_selected = (g_state.diff.selected_nodes.find(&node) != g_state.diff.selected_nodes.end()) || (g_state.diff.selected_node == &node);
 
             struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
             if (is_selected)
@@ -1583,10 +1673,14 @@ static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
             button_style.active = nk_style_item_color(nk_rgb(70, 70, 80));
 
             struct nk_color text_color = is_selected ? nk_rgb(255, 255, 255) : nk_rgb(200, 200, 200);
-            if (!is_selected) {
-                if (node.status == DiffStatus::Added) text_color = nk_rgb(100, 255, 100);
-                else if (node.status == DiffStatus::Modified) text_color = nk_rgb(255, 200, 50);
-                else if (node.status == DiffStatus::Removed) text_color = nk_rgb(255, 100, 100);
+            if (!is_selected)
+            {
+                if (node.status == DiffStatus::Added)
+                    text_color = nk_rgb(100, 255, 100);
+                else if (node.status == DiffStatus::Modified)
+                    text_color = nk_rgb(255, 200, 50);
+                else if (node.status == DiffStatus::Removed)
+                    text_color = nk_rgb(255, 100, 100);
             }
 
             button_style.text_normal = text_color;
@@ -1615,22 +1709,21 @@ static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
         std::cerr << "Error drawing diff node: " << e.what() << std::endl;
     }
 }
-// ------------------------------------
 
 void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
 {
     try
     {
-        if (!has_matching_child(node, search_query))
+        if (!has_matching_child(node, g_state.browser.search_query))
             return;
 
-        visible_nodes.push_back(&node);
+        g_state.browser.visible_nodes.push_back(&node);
 
         if (std::holds_alternative<Core::FolderInfo>(node.data))
         {
             const auto &folder = std::get<Core::FolderInfo>(node.data);
-            bool is_expanded = expanded_folders.find(&node) != expanded_folders.end();
-            bool is_selected = (selected_file_nodes.find(&node) != selected_file_nodes.end()) || (selected_node == &node);
+            bool is_expanded = g_state.browser.expanded_folders.find(&node) != g_state.browser.expanded_folders.end();
+            bool is_selected = (g_state.browser.selected_nodes.find(&node) != g_state.browser.selected_nodes.end()) || (g_state.browser.selected_node == &node);
 
             struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
             if (is_selected)
@@ -1652,11 +1745,11 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
             {
                 if (is_expanded)
                 {
-                    expanded_folders.erase(&node);
+                    g_state.browser.expanded_folders.erase(&node);
                 }
                 else
                 {
-                    expanded_folders.insert(&node);
+                    g_state.browser.expanded_folders.insert(&node);
                 }
             }
 
@@ -1673,7 +1766,7 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
             button_style.rounding = 3.0f;
 
             std::string folder_label = node.name;
-            bool highlight_match = !search_query.empty() && matches_search(node, search_query);
+            bool highlight_match = !g_state.browser.search_query.empty() && matches_search(node, g_state.browser.search_query);
             if (highlight_match)
                 button_style.text_normal = nk_rgb(100, 255, 100);
 
@@ -1697,11 +1790,11 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
         }
         else
         {
-            if (!matches_search(node, search_query))
+            if (!matches_search(node, g_state.browser.search_query))
                 return;
 
             const auto &file_info = std::get<Core::FileInfo>(node.data);
-            bool is_selected = (selected_file_nodes.find(&node) != selected_file_nodes.end()) || (selected_node == &node);
+            bool is_selected = (g_state.browser.selected_nodes.find(&node) != g_state.browser.selected_nodes.end()) || (g_state.browser.selected_node == &node);
 
             struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
             if (is_selected)
@@ -1758,49 +1851,56 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
     }
 }
 
-// Recursive spine tree rendering: walks SpineCategory tree, drawing folders + leaf entries
-static bool spine_category_has_search_match(const SpineCategory& cat,
-                                             const std::vector<SpineEntry>& entries,
-                                             const std::string& query_lower) {
-    if (query_lower.empty()) return true;
+bool spine_category_has_search_match(const SpineCategory &cat, const std::vector<SpineEntry> &entries, const std::string &query_lower)
+{
+    if (query_lower.empty())
+        return true;
     // Check direct entries
-    for (size_t idx : cat.entry_indices) {
+    for (size_t idx : cat.entry_indices)
+    {
         std::string dn = entries[idx].display_name;
         std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
-        if (dn.find(query_lower) != std::string::npos) return true;
+        if (dn.find(query_lower) != std::string::npos)
+            return true;
         // Also match against the full category path
         std::string cp = entries[idx].category;
         std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
-        if (cp.find(query_lower) != std::string::npos) return true;
+        if (cp.find(query_lower) != std::string::npos)
+            return true;
     }
     // Check subcategories recursively
-    for (const auto& [name, sub] : cat.subcategories) {
-        if (spine_category_has_search_match(sub, entries, query_lower)) return true;
+    for (const auto &[name, sub] : cat.subcategories)
+    {
+        if (spine_category_has_search_match(sub, entries, query_lower))
+            return true;
     }
     return false;
 }
 
-static void draw_spine_category(nk_context* ctx,
-                                 const SpineCategory& cat,
-                                 const std::vector<SpineEntry>& entries,
-                                 int depth) {
-    std::string query_lower = spine_search_query;
+void draw_spine_category(nk_context *ctx, const SpineCategory &cat, const std::vector<SpineEntry> &entries, int depth)
+{
+    std::string query_lower = g_state.spine.search_query;
     std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
 
     // For each subcategory, draw as a collapsible folder
-    for (const auto& [subname, sub] : cat.subcategories) {
+    for (const auto &[subname, sub] : cat.subcategories)
+    {
         // Check if this subtree has any matching entries
-        if (!spine_category_has_search_match(sub, entries, query_lower)) continue;
+        if (!spine_category_has_search_match(sub, entries, query_lower))
+            continue;
 
         // Use full_path as the unique key for expand/collapse
-        bool expanded = spine_expanded_categories.count(sub.full_path) > 0;
+        bool expanded = g_state.spine.expanded_categories.count(sub.full_path) > 0;
         // Auto-expand when searching
-        if (!query_lower.empty()) expanded = true;
+        if (!query_lower.empty())
+            expanded = true;
 
         // Count total entries under this subtree recursively
-        std::function<int(const SpineCategory&)> count_entries = [&](const SpineCategory& c) -> int {
+        std::function<int(const SpineCategory &)> count_entries = [&](const SpineCategory &c) -> int
+        {
             int n = (int)c.entry_indices.size();
-            for (const auto& [k, sc] : c.subcategories) n += count_entries(sc);
+            for (const auto &[k, sc] : c.subcategories)
+                n += count_entries(sc);
             return n;
         };
         int total = count_entries(sub);
@@ -1808,7 +1908,8 @@ static void draw_spine_category(nk_context* ctx,
         nk_layout_row_begin(ctx, NK_STATIC, 24, 2);
         // Indent
         float indent = depth * 16.0f;
-        if (indent > 0) {
+        if (indent > 0)
+        {
             nk_layout_row_push(ctx, indent);
             nk_spacing(ctx, 1);
         }
@@ -1826,28 +1927,35 @@ static void draw_spine_category(nk_context* ctx,
         cbtn.text_hover = nk_rgb(220, 230, 255);
 
         std::string folder_label = (expanded ? "- " : "+ ") + sub.name + " (" + std::to_string(total) + ")";
-        if (nk_button_label_styled(ctx, &cbtn, folder_label.c_str())) {
-            if (expanded) spine_expanded_categories.erase(sub.full_path);
-            else spine_expanded_categories.insert(sub.full_path);
+        if (nk_button_label_styled(ctx, &cbtn, folder_label.c_str()))
+        {
+            if (expanded)
+                g_state.spine.expanded_categories.erase(sub.full_path);
+            else
+                g_state.spine.expanded_categories.insert(sub.full_path);
         }
         nk_layout_row_end(ctx);
 
-        if (!expanded) continue;
+        if (!expanded)
+            continue;
 
         // Draw entries directly in this folder
-        for (size_t idx : sub.entry_indices) {
-            const auto& ent = entries[idx];
+        for (size_t idx : sub.entry_indices)
+        {
+            const auto &ent = entries[idx];
 
-            if (!query_lower.empty()) {
+            if (!query_lower.empty())
+            {
                 std::string dn = ent.display_name;
                 std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
                 std::string cp = ent.category;
                 std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
                 if (dn.find(query_lower) == std::string::npos &&
-                    cp.find(query_lower) == std::string::npos) continue;
+                    cp.find(query_lower) == std::string::npos)
+                    continue;
             }
 
-            spine_visible_indices.push_back((int)idx);
+            g_state.spine.visible_indices.push_back((int)idx);
 
             nk_layout_row_begin(ctx, NK_STATIC, 24, 2);
             float entry_indent = (depth + 1) * 16.0f;
@@ -1855,33 +1963,39 @@ static void draw_spine_category(nk_context* ctx,
             nk_spacing(ctx, 1);
 
             nk_layout_row_push(ctx, 300.0f - entry_indent);
-            bool isSel = ((int)idx == spine_selected_index);
+            bool isSel = ((int)idx == g_state.spine.selected_index);
             struct nk_style_button ebtn = ctx->style.button;
             ebtn.text_alignment = NK_TEXT_LEFT;
             ebtn.padding = nk_vec2(6, 3);
             ebtn.rounding = 2.0f;
-            if (isSel) {
+            if (isSel)
+            {
                 ebtn.normal = nk_style_item_color(nk_rgb(55, 80, 120));
                 ebtn.hover = nk_style_item_color(nk_rgb(65, 90, 130));
                 ebtn.text_normal = nk_rgb(255, 255, 255);
-            } else {
+            }
+            else
+            {
                 ebtn.normal = nk_style_item_color(nk_rgb(38, 38, 42));
                 ebtn.hover = nk_style_item_color(nk_rgb(50, 50, 55));
                 ebtn.text_normal = nk_rgb(190, 190, 190);
             }
             ebtn.text_hover = nk_rgb(255, 255, 255);
 
-            if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str())) {
-                if (spine_selected_index != (int)idx) {
-                    spine_selected_index = (int)idx;
-                    spine_anim_selected = 0;
-                    spine_skin_selected = 0;
-                    spine_last_tick = 0;
-                    spine_edit_mode = false;
-                    if (!active_spine_viewer) active_spine_viewer = std::make_unique<SpineViewer>();
-                    active_spine_viewer->loadSkeleton(spine_dictionary, *data_pack, ent);
-                    active_spine_viewer->setFlipX(spine_flip_x);
-                    active_spine_viewer->setFlipY(spine_flip_y);
+            if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str()))
+            {
+                if (g_state.spine.selected_index != (int)idx)
+                {
+                    g_state.spine.selected_index = (int)idx;
+                    g_state.spine.selected_animation = 0;
+                    g_state.spine.selected_skin = 0;
+                    g_state.spine.last_tick = 0;
+                    g_state.spine.edit_mode = false;
+                    if (!g_state.spine.viewer)
+                        g_state.spine.viewer = std::make_unique<SpineViewer>();
+                    g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, ent);
+                    g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
+                    g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
                 }
             }
             nk_layout_row_end(ctx);
@@ -1892,138 +2006,60 @@ static void draw_spine_category(nk_context* ctx,
     }
 
     // Also draw any entries directly at this level (root-level entries)
-    if (depth == 0) {
-        for (size_t idx : cat.entry_indices) {
-            const auto& ent = entries[idx];
+    if (depth == 0)
+    {
+        for (size_t idx : cat.entry_indices)
+        {
+            const auto &ent = entries[idx];
 
-            if (!query_lower.empty()) {
+            if (!query_lower.empty())
+            {
                 std::string dn = ent.display_name;
                 std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
-                if (dn.find(query_lower) == std::string::npos) continue;
+                if (dn.find(query_lower) == std::string::npos)
+                    continue;
             }
 
-            spine_visible_indices.push_back((int)idx);
+            g_state.spine.visible_indices.push_back((int)idx);
 
             nk_layout_row_dynamic(ctx, 24, 1);
-            bool isSel = ((int)idx == spine_selected_index);
+            bool isSel = ((int)idx == g_state.spine.selected_index);
             struct nk_style_button ebtn = ctx->style.button;
             ebtn.text_alignment = NK_TEXT_LEFT;
             ebtn.padding = nk_vec2(16, 3);
             ebtn.rounding = 2.0f;
-            if (isSel) {
+            if (isSel)
+            {
                 ebtn.normal = nk_style_item_color(nk_rgb(55, 80, 120));
                 ebtn.hover = nk_style_item_color(nk_rgb(65, 90, 130));
                 ebtn.text_normal = nk_rgb(255, 255, 255);
-            } else {
+            }
+            else
+            {
                 ebtn.normal = nk_style_item_color(nk_rgb(38, 38, 42));
                 ebtn.hover = nk_style_item_color(nk_rgb(50, 50, 55));
                 ebtn.text_normal = nk_rgb(190, 190, 190);
             }
             ebtn.text_hover = nk_rgb(255, 255, 255);
 
-            if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str())) {
-                if (spine_selected_index != (int)idx) {
-                    spine_selected_index = (int)idx;
-                    spine_anim_selected = 0;
-                    spine_skin_selected = 0;
-                    spine_last_tick = 0;
-                    spine_edit_mode = false;
-                    if (!active_spine_viewer) active_spine_viewer = std::make_unique<SpineViewer>();
-                    active_spine_viewer->loadSkeleton(spine_dictionary, *data_pack, ent);
-                    active_spine_viewer->setFlipX(spine_flip_x);
-                    active_spine_viewer->setFlipY(spine_flip_y);
+            if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str()))
+            {
+                if (g_state.spine.selected_index != (int)idx)
+                {
+                    g_state.spine.selected_index = (int)idx;
+                    g_state.spine.selected_animation = 0;
+                    g_state.spine.selected_skin = 0;
+                    g_state.spine.last_tick = 0;
+                    g_state.spine.edit_mode = false;
+                    if (!g_state.spine.viewer)
+                        g_state.spine.viewer = std::make_unique<SpineViewer>();
+                    g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, ent);
+                    g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
+                    g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
                 }
             }
         }
     }
-}
-
-// Headless CLI test: --test-spine <pack_path>
-// Scans the pack, builds spine dictionary, tries loading every skeleton, reports pass/fail.
-int run_spine_test(const std::string& pack_path_str) {
-    // Convert to wide string for DataPack
-    int sz = MultiByteToWideChar(CP_UTF8, 0, pack_path_str.c_str(), (int)pack_path_str.size(), NULL, 0);
-    std::wstring wpath(sz, 0);
-    MultiByteToWideChar(CP_UTF8, 0, pack_path_str.c_str(), (int)pack_path_str.size(), &wpath[0], sz);
-
-    LogInfo("=== SPINE TEST START ===");
-    std::cout << "Opening pack: " << pack_path_str << std::endl;
-
-    auto pack = std::make_unique<DataPack>(wpath);
-    if (pack->GetType() == DataPack::PackType::Unknown) {
-        std::cerr << "ERROR: Invalid pack file" << std::endl;
-        return 1;
-    }
-
-    std::cout << "Scanning file tree..." << std::endl;
-    std::atomic<float> progress = 0;
-    pack->Scan(progress);
-    int total_files = get_file_count(pack->GetFileTree());
-    std::cout << "Scan complete: " << total_files << " files" << std::endl;
-
-    std::cout << "Building spine dictionary..." << std::endl;
-    SpineDictionary dict;
-    dict.Build(*pack, pack->GetFileTree());
-    const auto& entries = dict.GetEntries();
-    std::cout << "Dictionary: " << entries.size() << " spine entries" << std::endl;
-
-    // Minimal SDL/GL init for texture loading (needed by SpineViewer)
-    SDL_Init(SDL_INIT_VIDEO);
-    IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_Window* win = SDL_CreateWindow("test", 0, 0, 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-    SDL_GLContext gl = SDL_GL_CreateContext(win);
-    glewInit();
-
-    int pass = 0, fail = 0;
-    std::vector<std::pair<std::string, std::string>> failures;
-
-    SpineViewer viewer;
-    for (size_t i = 0; i < entries.size(); i++) {
-        const auto& e = entries[i];
-        bool ok = viewer.loadSkeleton(dict, *pack, e);
-        if (ok) {
-            // Try one frame of update+render to catch runtime crashes
-            try {
-                viewer.update(0.016f);
-                viewer.render(64, 64);
-            } catch (...) {
-                ok = false;
-            }
-            pass++;
-        } else {
-            fail++;
-            failures.push_back({e.display_name, viewer.getError()});
-        }
-        viewer.unload();
-
-        if ((i + 1) % 500 == 0 || i == entries.size() - 1) {
-            std::cout << "  " << (i+1) << "/" << entries.size()
-                      << " (pass=" << pass << " fail=" << fail << ")" << std::endl;
-        }
-    }
-
-    std::cout << "\n========== RESULTS ==========" << std::endl;
-    std::cout << "Total:  " << entries.size() << std::endl;
-    std::cout << "Pass:   " << pass << std::endl;
-    std::cout << "Fail:   " << fail << std::endl;
-
-    if (!failures.empty()) {
-        std::cout << "\nFailures:" << std::endl;
-        for (auto& [name, err] : failures) {
-            std::cout << "  " << name << ": " << err << std::endl;
-        }
-    }
-
-    LogInfo("=== SPINE TEST END: pass=" + std::to_string(pass) + " fail=" + std::to_string(fail) + " ===");
-
-    SDL_GL_DeleteContext(gl);
-    SDL_DestroyWindow(win);
-    IMG_Quit();
-    SDL_Quit();
-    return fail > 0 ? 1 : 0;
 }
 
 int main(int argc, char *argv[])
@@ -2136,116 +2172,124 @@ int main(int argc, char *argv[])
                     {
                         running = false;
                     }
-                    else if (image_window && windowID == SDL_GetWindowID(image_window))
+                    else if (g_state.image.window && windowID == SDL_GetWindowID(g_state.image.window))
                     {
-                        if (image_window_texture)
+                        if (g_state.image.texture)
                         {
-                            SDL_DestroyTexture(image_window_texture);
-                            image_window_texture = nullptr;
+                            SDL_DestroyTexture(g_state.image.texture);
+                            g_state.image.texture = nullptr;
                         }
-                        if (image_renderer)
+                        if (g_state.image.renderer)
                         {
-                            SDL_DestroyRenderer(image_renderer);
-                            image_renderer = nullptr;
+                            SDL_DestroyRenderer(g_state.image.renderer);
+                            g_state.image.renderer = nullptr;
                         }
-                        SDL_DestroyWindow(image_window);
-                        image_window = nullptr;
+                        SDL_DestroyWindow(g_state.image.window);
+                        g_state.image.window = nullptr;
                     }
                 }
             }
             else if (evt.type == SDL_KEYDOWN)
             {
                 // Spine viewer gets priority for arrow keys when open
-                if (show_spine_viewer && spine_dictionary.IsBuilt() && !spine_visible_indices.empty())
+                if (g_state.spine.show_window && g_state.spine.dictionary.IsBuilt() && !g_state.spine.visible_indices.empty())
                 {
                     if (evt.key.keysym.sym == SDLK_UP || evt.key.keysym.sym == SDLK_DOWN)
                     {
-                        auto it = std::find(spine_visible_indices.begin(), spine_visible_indices.end(), spine_selected_index);
-                        int new_idx = spine_selected_index;
-                        if (evt.key.keysym.sym == SDLK_UP) {
-                            if (it != spine_visible_indices.end() && it != spine_visible_indices.begin())
+                        auto it = std::find(g_state.spine.visible_indices.begin(), g_state.spine.visible_indices.end(), g_state.spine.selected_index);
+                        int new_idx = g_state.spine.selected_index;
+                        if (evt.key.keysym.sym == SDLK_UP)
+                        {
+                            if (it != g_state.spine.visible_indices.end() && it != g_state.spine.visible_indices.begin())
                                 new_idx = *(it - 1);
-                            else if (it == spine_visible_indices.end() && !spine_visible_indices.empty())
-                                new_idx = spine_visible_indices.back();
-                        } else {
-                            if (it != spine_visible_indices.end() && (it + 1) != spine_visible_indices.end())
-                                new_idx = *(it + 1);
-                            else if (it == spine_visible_indices.end() && !spine_visible_indices.empty())
-                                new_idx = spine_visible_indices.front();
+                            else if (it == g_state.spine.visible_indices.end() && !g_state.spine.visible_indices.empty())
+                                new_idx = g_state.spine.visible_indices.back();
                         }
-                        if (new_idx != spine_selected_index) {
-                            spine_selected_index = new_idx;
+                        else
+                        {
+                            if (it != g_state.spine.visible_indices.end() && (it + 1) != g_state.spine.visible_indices.end())
+                                new_idx = *(it + 1);
+                            else if (it == g_state.spine.visible_indices.end() && !g_state.spine.visible_indices.empty())
+                                new_idx = g_state.spine.visible_indices.front();
+                        }
+                        if (new_idx != g_state.spine.selected_index)
+                        {
+                            g_state.spine.selected_index = new_idx;
                             // Load skeleton on arrow key selection
-                            const auto& entries = spine_dictionary.GetEntries();
-                            if (spine_selected_index >= 0 && spine_selected_index < (int)entries.size()) {
-                                if (!active_spine_viewer) active_spine_viewer = std::make_unique<SpineViewer>();
-                                active_spine_viewer->loadSkeleton(spine_dictionary, *data_pack, entries[spine_selected_index]);
-                                active_spine_viewer->setFlipX(spine_flip_x);
-                                active_spine_viewer->setFlipY(spine_flip_y);
-                                spine_anim_selected = 0;
-                                spine_skin_selected = 0;
-                                spine_last_tick = 0;
-                                spine_edit_mode = false;
+                            const auto &entries = g_state.spine.dictionary.GetEntries();
+                            if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)entries.size())
+                            {
+                                if (!g_state.spine.viewer)
+                                    g_state.spine.viewer = std::make_unique<SpineViewer>();
+                                g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, entries[g_state.spine.selected_index]);
+                                g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
+                                g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
+                                g_state.spine.selected_animation = 0;
+                                g_state.spine.selected_skin = 0;
+                                g_state.spine.last_tick = 0;
+                                g_state.spine.edit_mode = false;
                             }
                         }
                     }
-                    else if (evt.key.keysym.sym == SDLK_RETURN && spine_selected_index >= 0)
+                    else if (evt.key.keysym.sym == SDLK_RETURN && g_state.spine.selected_index >= 0)
                     {
-                        const auto& entries = spine_dictionary.GetEntries();
-                        if (spine_selected_index < (int)entries.size()) {
-                            if (!active_spine_viewer) active_spine_viewer = std::make_unique<SpineViewer>();
-                            active_spine_viewer->loadSkeleton(spine_dictionary, *data_pack, entries[spine_selected_index]);
-                            spine_anim_selected = 0;
-                            spine_skin_selected = 0;
-                            spine_last_tick = 0;
-                            spine_edit_mode = false;
+                        const auto &entries = g_state.spine.dictionary.GetEntries();
+                        if (g_state.spine.selected_index < (int)entries.size())
+                        {
+                            if (!g_state.spine.viewer)
+                                g_state.spine.viewer = std::make_unique<SpineViewer>();
+                            g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, entries[g_state.spine.selected_index]);
+                            g_state.spine.selected_animation = 0;
+                            g_state.spine.selected_skin = 0;
+                            g_state.spine.last_tick = 0;
+                            g_state.spine.edit_mode = false;
                         }
                     }
                 }
-                else if (selected_node)
+                else if (g_state.browser.selected_node)
                 {
                     // File tree arrow keys (only when spine viewer is NOT open)
-                    if ((evt.key.keysym.sym == SDLK_UP || evt.key.keysym.sym == SDLK_DOWN) && !visible_nodes.empty())
+                    if ((evt.key.keysym.sym == SDLK_UP || evt.key.keysym.sym == SDLK_DOWN) && !g_state.browser.visible_nodes.empty())
                     {
-                        auto it = std::find(visible_nodes.begin(), visible_nodes.end(), selected_node);
-                        if (it != visible_nodes.end())
+                        auto it = std::find(g_state.browser.visible_nodes.begin(), g_state.browser.visible_nodes.end(), g_state.browser.selected_node);
+                        if (it != g_state.browser.visible_nodes.end())
                         {
-                            if (evt.key.keysym.sym == SDLK_UP && it > visible_nodes.begin())
+                            if (evt.key.keysym.sym == SDLK_UP && it > g_state.browser.visible_nodes.begin())
                             {
-                                selected_node = *(it - 1);
-                                handle_node_click(selected_node, std::holds_alternative<Core::FolderInfo>(selected_node->data));
+                                g_state.browser.selected_node = *(it - 1);
+                                handle_node_click(g_state.browser.selected_node, std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data));
                                 scroll_to_selected = true;
                             }
-                            else if (evt.key.keysym.sym == SDLK_DOWN && it < visible_nodes.end() - 1)
+                            else if (evt.key.keysym.sym == SDLK_DOWN && it < g_state.browser.visible_nodes.end() - 1)
                             {
-                                selected_node = *(it + 1);
-                                handle_node_click(selected_node, std::holds_alternative<Core::FolderInfo>(selected_node->data));
+                                g_state.browser.selected_node = *(it + 1);
+                                handle_node_click(g_state.browser.selected_node, std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data));
                                 scroll_to_selected = true;
                             }
                         }
                     }
                     else if (evt.key.keysym.sym == SDLK_RETURN)
                     {
-                        if (std::holds_alternative<Core::FolderInfo>(selected_node->data))
+                        if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data))
                         {
-                            if (expanded_folders.find(selected_node) != expanded_folders.end())
-                                expanded_folders.erase(selected_node);
+                            if (g_state.browser.expanded_folders.find(g_state.browser.selected_node) != g_state.browser.expanded_folders.end())
+                                g_state.browser.expanded_folders.erase(g_state.browser.selected_node);
                             else
-                                expanded_folders.insert(selected_node);
+                                g_state.browser.expanded_folders.insert(g_state.browser.selected_node);
                         }
                     }
                     else if (evt.key.keysym.sym == SDLK_RIGHT)
                     {
-                        if (std::holds_alternative<Core::FolderInfo>(selected_node->data))
+                        if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data))
                         {
-                            expanded_folders.insert(selected_node);
+                            g_state.browser.expanded_folders.insert(g_state.browser.selected_node);
                         }
                     }
                     else if (evt.key.keysym.sym == SDLK_LEFT)
                     {
-                        if (std::holds_alternative<Core::FolderInfo>(selected_node->data))
+                        if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data))
                         {
-                            expanded_folders.erase(selected_node);
+                            g_state.browser.expanded_folders.erase(g_state.browser.selected_node);
                         }
                     }
                 }
@@ -2254,47 +2298,47 @@ int main(int argc, char *argv[])
         }
         nk_input_end(ctx);
 
-        if (is_task_running && task_future.valid() &&
-            task_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        if (g_state.tasks.running && g_state.tasks.future.valid() &&
+            g_state.tasks.future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
         {
-            is_task_running = false;
+            g_state.tasks.running = false;
             try
             {
-                task_future.get();
+                g_state.tasks.future.get();
             }
             catch (const std::exception &e)
             {
-                status_text = "Error: " + std::string(e.what());
+                g_state.tasks.status = "Error: " + std::string(e.what());
             }
             catch (...)
             {
-                status_text = "Unknown error occurred";
+                g_state.tasks.status = "Unknown error occurred";
             }
-            task_progress = 1.0f;
-            if (status_text.find("Scanning") != std::string::npos)
+            g_state.tasks.progress = 1.0f;
+            if (g_state.tasks.status.find("Scanning") != std::string::npos)
             {
-                is_scan_complete = true;
-                status_text = "Scan complete. " + std::to_string(get_file_count(data_pack->GetFileTree())) + " files found.";
+                g_state.tasks.scan_complete = true;
+                g_state.tasks.status = "Scan complete. " + std::to_string(get_file_count(g_state.browser.data_pack->GetFileTree())) + " files found.";
             }
-            else if (status_text.find("Extracting") != std::string::npos)
+            else if (g_state.tasks.status.find("Extracting") != std::string::npos)
             {
-                status_text = "Extraction complete.";
+                g_state.tasks.status = "Extraction complete.";
             }
         }
 
         int window_width, window_height;
         SDL_GetWindowSize(win, &window_width, &window_height);
 
-        if (show_context_menu && context_menu_node)
+        if (g_state.context_menu.visible && g_state.context_menu.node)
         {
             if (nk_begin(ctx, "Context Menu",
-                         nk_rect(context_menu_pos.x, context_menu_pos.y, 180.0f, 200.0f),
+                         nk_rect(g_state.context_menu.position.x, g_state.context_menu.position.y, 180.0f, 200.0f),
                          NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR))
             {
 
-                if (std::holds_alternative<Core::FileInfo>(context_menu_node->data))
+                if (std::holds_alternative<Core::FileInfo>(g_state.context_menu.node->data))
                 {
-                    const auto &info = std::get<Core::FileInfo>(context_menu_node->data);
+                    const auto &info = std::get<Core::FileInfo>(g_state.context_menu.node->data);
 
                     nk_layout_row_dynamic(ctx, 25, 1);
 
@@ -2302,47 +2346,47 @@ int main(int argc, char *argv[])
                     {
                         if (nk_button_label(ctx, "Export as JSON"))
                         {
-                            export_db_as_json_file(*context_menu_node);
-                            show_context_menu = false;
+                            export_db_as_json_file(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                     }
                     else if (is_scsp_file(info.format))
                     {
                         if (nk_button_label(ctx, "Export as JSON"))
                         {
-                            export_scsp_as_json_file(*context_menu_node);
-                            show_context_menu = false;
+                            export_scsp_as_json_file(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                     }
                     else if (is_sct_format(info.format))
                     {
                         if (nk_button_label(ctx, "Export as PNG"))
                         {
-                            export_file_as_png(*context_menu_node);
-                            show_context_menu = false;
+                            export_file_as_png(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                         if (nk_button_label(ctx, "Export as SCT"))
                         {
-                            export_file_as_sct(*context_menu_node);
-                            show_context_menu = false;
+                            export_file_as_sct(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                         if (nk_button_label(ctx, "Open Preview Window"))
                         {
-                            open_image_preview_window(*context_menu_node);
-                            show_context_menu = false;
+                            open_image_preview_window(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                     }
                     else if (is_previewable_format(info.format))
                     {
                         if (nk_button_label(ctx, "Export as PNG"))
                         {
-                            export_file_as_png(*context_menu_node);
-                            show_context_menu = false;
+                            export_file_as_png(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                         if (nk_button_label(ctx, "Open Preview Window"))
                         {
-                            open_image_preview_window(*context_menu_node);
-                            show_context_menu = false;
+                            open_image_preview_window(*g_state.context_menu.node);
+                            g_state.context_menu.visible = false;
                         }
                     }
 
@@ -2350,36 +2394,36 @@ int main(int argc, char *argv[])
                     {
                         try
                         {
-                            auto f = pfd::save_file("Extract File", context_menu_node->name, {"All Files", "*.*"});
+                            auto f = pfd::save_file("Extract File", g_state.context_menu.node->name, {"All Files", "*.*"});
                             if (!f.result().empty())
                             {
-                                std::vector<uint8_t> file_data = data_pack->GetFileData(*context_menu_node);
+                                std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(*g_state.context_menu.node);
                                 std::ofstream out(f.result(), std::ios::binary);
                                 out.write((const char *)file_data.data(), file_data.size());
                                 out.close();
-                                status_text = "Extracted to: " + f.result();
+                                g_state.tasks.status = "Extracted to: " + f.result();
                             }
                         }
                         catch (...)
                         {
                         }
-                        show_context_menu = false;
+                        g_state.context_menu.visible = false;
                     }
                 }
 
                 if (nk_button_label(ctx, "Close"))
                 {
-                    show_context_menu = false;
+                    g_state.context_menu.visible = false;
                 }
             }
             else
             {
-                show_context_menu = false;
+                g_state.context_menu.visible = false;
             }
             nk_end(ctx);
         }
 
-        if (show_export_options_window)
+        if (g_state.common.show_options)
         {
             const float export_options_width = 530.0f;
             const float export_options_height = 460.0f;
@@ -2398,7 +2442,7 @@ int main(int argc, char *argv[])
                 nk_layout_row_push(ctx, 120);
                 {
                     struct nk_style_button toggle_style = ctx->style.button;
-                    if (export_sct_as_png)
+                    if (g_state.common.export_sct_as_png)
                     {
                         toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
                         toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
@@ -2413,9 +2457,9 @@ int main(int argc, char *argv[])
                     toggle_style.text_normal = nk_rgb(240, 240, 240);
                     toggle_style.text_hover = nk_rgb(255, 255, 255);
                     toggle_style.text_active = nk_rgb(255, 255, 255);
-                    if (nk_button_label_styled(ctx, &toggle_style, export_sct_as_png ? "ON" : "OFF"))
+                    if (nk_button_label_styled(ctx, &toggle_style, g_state.common.export_sct_as_png ? "ON" : "OFF"))
                     {
-                        export_sct_as_png = export_sct_as_png ? nk_false : nk_true;
+                        g_state.common.export_sct_as_png = g_state.common.export_sct_as_png ? nk_false : nk_true;
                         save_options_to_ini();
                     }
                 }
@@ -2434,7 +2478,7 @@ int main(int argc, char *argv[])
                 nk_layout_row_push(ctx, 120);
                 {
                     struct nk_style_button toggle_style = ctx->style.button;
-                    if (export_db_as_json)
+                    if (g_state.common.export_db_as_json)
                     {
                         toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
                         toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
@@ -2449,9 +2493,9 @@ int main(int argc, char *argv[])
                     toggle_style.text_normal = nk_rgb(240, 240, 240);
                     toggle_style.text_hover = nk_rgb(255, 255, 255);
                     toggle_style.text_active = nk_rgb(255, 255, 255);
-                    if (nk_button_label_styled(ctx, &toggle_style, export_db_as_json ? "ON" : "OFF"))
+                    if (nk_button_label_styled(ctx, &toggle_style, g_state.common.export_db_as_json ? "ON" : "OFF"))
                     {
-                        export_db_as_json = export_db_as_json ? nk_false : nk_true;
+                        g_state.common.export_db_as_json = g_state.common.export_db_as_json ? nk_false : nk_true;
                         save_options_to_ini();
                     }
                 }
@@ -2470,7 +2514,7 @@ int main(int argc, char *argv[])
                 nk_layout_row_push(ctx, 120);
                 {
                     struct nk_style_button toggle_style = ctx->style.button;
-                    if (enable_open_folder)
+                    if (g_state.common.enable_open_folder)
                     {
                         toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
                         toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
@@ -2485,9 +2529,9 @@ int main(int argc, char *argv[])
                     toggle_style.text_normal = nk_rgb(240, 240, 240);
                     toggle_style.text_hover = nk_rgb(255, 255, 255);
                     toggle_style.text_active = nk_rgb(255, 255, 255);
-                    if (nk_button_label_styled(ctx, &toggle_style, enable_open_folder ? "ON" : "OFF"))
+                    if (nk_button_label_styled(ctx, &toggle_style, g_state.common.enable_open_folder ? "ON" : "OFF"))
                     {
-                        enable_open_folder = enable_open_folder ? nk_false : nk_true;
+                        g_state.common.enable_open_folder = g_state.common.enable_open_folder ? nk_false : nk_true;
                         save_options_to_ini();
                     }
                 }
@@ -2497,29 +2541,28 @@ int main(int argc, char *argv[])
                 nk_label(ctx, "When enabled, open folder button show up", NK_TEXT_LEFT);
                 nk_label(ctx, "letting user choose a folder to scan instead of only data.pack", NK_TEXT_LEFT);
 
-
                 nk_layout_row_dynamic(ctx, 25, 1);
 
                 nk_layout_row_dynamic(ctx, 30, 2);
                 if (nk_button_label(ctx, "OK"))
                 {
                     save_options_to_ini();
-                    show_export_options_window = false;
-                    status_text = "Options saved";
+                    g_state.common.show_options = false;
+                    g_state.tasks.status = "Options saved";
                 }
                 if (nk_button_label(ctx, "Cancel"))
                 {
-                    show_export_options_window = false;
+                    g_state.common.show_options = false;
                 }
             }
             else
             {
-                show_export_options_window = false;
+                g_state.common.show_options = false;
             }
             nk_end(ctx);
         }
 
-        if (show_credits_window)
+        if (g_state.credits.show_window)
         {
             const float credits_options_width = 700.0f;
             const float credits_options_height = 300.0f;
@@ -2544,17 +2587,17 @@ int main(int argc, char *argv[])
                 nk_layout_row_dynamic(ctx, 30, 1);
                 if (nk_button_label(ctx, "Close"))
                 {
-                    show_credits_window = false;
+                    g_state.credits.show_window = false;
                 }
             }
             else
             {
-                show_credits_window = false;
+                g_state.credits.show_window = false;
             }
             nk_end(ctx);
         }
 
-        if (show_export_success)
+        if (g_state.common.show_success_popup)
         {
             const float export_success_width = 215.0f;
             const float export_success_height = 120.0f;
@@ -2565,21 +2608,21 @@ int main(int argc, char *argv[])
             {
 
                 nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, export_success_msg.c_str(), NK_TEXT_CENTERED);
+                nk_label(ctx, g_state.common.success_message.c_str(), NK_TEXT_CENTERED);
                 nk_layout_row_dynamic(ctx, 30, 1);
                 if (nk_button_label(ctx, "OK"))
                 {
-                    show_export_success = false;
+                    g_state.common.show_success_popup = false;
                 }
             }
             else
             {
-                show_export_success = false;
+                g_state.common.show_success_popup = false;
             }
             nk_end(ctx);
         }
 
-        if (show_atlas_window && !preview_atlas_data.empty())
+        if (g_state.atlas.show_window && !g_state.preview.atlas_preview.empty())
         {
             if (nk_begin(ctx, "Atlas Viewer", nk_rect(40, 40, (float)window_width - 80, (float)window_height - 80),
                          NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE))
@@ -2589,7 +2632,7 @@ int main(int argc, char *argv[])
                 nk_layout_row_push(ctx, 120);
                 if (nk_button_label(ctx, "Copy All"))
                 {
-                    SDL_SetClipboardText(full_atlas_data.c_str());
+                    SDL_SetClipboardText(g_state.preview.atlas_full.c_str());
                 }
                 nk_layout_row_push(ctx, 120);
                 if (nk_button_label(ctx, "Save As..."))
@@ -2602,7 +2645,7 @@ int main(int argc, char *argv[])
                             std::ofstream out(f.result());
                             if (out.is_open())
                             {
-                                out << full_atlas_data;
+                                out << g_state.preview.atlas_full;
                                 out.close();
                             }
                         }
@@ -2613,29 +2656,29 @@ int main(int argc, char *argv[])
                 }
                 nk_layout_row_end(ctx);
 
-                if (atlas_text_buf.empty())
+                if (g_state.atlas.text_buffer.empty())
                 {
-                    atlas_text_buf.push_back('\0');
+                    g_state.atlas.text_buffer.push_back('\0');
                 }
                 nk_layout_row_dynamic(ctx, (float)window_height - 180, 1);
-                nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX | NK_EDIT_READ_ONLY, atlas_text_buf.data(), (int)atlas_text_buf.size(), nk_filter_default);
+                nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX | NK_EDIT_READ_ONLY, g_state.atlas.text_buffer.data(), (int)g_state.atlas.text_buffer.size(), nk_filter_default);
             }
             else
             {
-                show_atlas_window = false;
+                g_state.atlas.show_window = false;
             }
             nk_end(ctx);
         }
 
         if (nk_begin(ctx, "Main", nk_rect(0, 0, (float)window_width, (float)window_height), NK_WINDOW_NO_SCROLLBAR))
         {
-            bool pack_loaded = (data_pack != nullptr);
-            bool tree_scanned = pack_loaded && is_scan_complete.load();
-            bool selection_exists = (selected_node != nullptr);
-            bool has_file_selection = !selected_file_nodes.empty();
-            bool has_extract_selection = has_file_selection || (selected_node != nullptr);
+            bool pack_loaded = (g_state.browser.data_pack != nullptr);
+            bool tree_scanned = pack_loaded && g_state.tasks.scan_complete.load();
+            bool selection_exists = (g_state.browser.selected_node != nullptr);
+            bool has_file_selection = !g_state.browser.selected_nodes.empty();
+            bool has_extract_selection = has_file_selection || (g_state.browser.selected_node != nullptr);
 
-            nk_layout_row_dynamic(ctx, 38, enable_open_folder ? 10 : 9);
+            nk_layout_row_dynamic(ctx, 38, g_state.common.enable_open_folder ? 10 : 9);
 
             struct nk_style_button btn_style = ctx->style.button;
             btn_style.rounding = 4.0f;
@@ -2643,8 +2686,8 @@ int main(int argc, char *argv[])
             btn_style.normal = nk_style_item_color(nk_rgb(70, 70, 75));
             btn_style.hover = nk_style_item_color(nk_rgb(90, 90, 95));
 
-            bool pack_already_loaded = (data_pack != nullptr);
-            bool can_open_pack = !is_task_running && !pack_already_loaded;
+            bool pack_already_loaded = (g_state.browser.data_pack != nullptr);
+            bool can_open_pack = !g_state.tasks.running && !pack_already_loaded;
 
             if (can_open_pack && nk_button_label_styled(ctx, &btn_style, "Open Pack"))
             {
@@ -2661,62 +2704,64 @@ int main(int argc, char *argv[])
                         MultiByteToWideChar(CP_UTF8, 0, selected_path.c_str(),
                                             (int)selected_path.size(), &wpath[0], size_needed);
 
-                        data_pack.reset();
-                        is_scan_complete = false;
-                        selected_node = nullptr;
-                        selected_file_nodes.clear();
-                        expanded_folders.clear();
-                        has_preview = false;
-                        preview_error = "";
-                        preview_atlas_data = "";
-                        preview_json_data = "";
-                        full_atlas_data = "";
-                        db_column_names.clear();
-                        db_rows.clear();
-                        search_query = "";
-                        memset(search_buffer, 0, sizeof(search_buffer));
-                        current_preview_mode = PreviewMode::None;
-                        if (spine_build_future.valid()) spine_build_future.wait();
-                        spine_dictionary.Clear();
-                        show_spine_viewer = false;
-                        spine_selected_index = -1;
-                        memset(spine_search_buffer, 0, sizeof(spine_search_buffer));
-                        spine_search_query = "";
-                        if (active_spine_viewer) active_spine_viewer->unload();
-                        active_spine_viewer.reset();
-                        spine_expanded_categories.clear();
-                        show_diff_tree = false;
-                        diff_root.reset();
-                        visible_diff_nodes.clear();
-                        expanded_diff_folders.clear();
-                        selected_diff_nodes.clear();
-                        selected_diff_node = nullptr;
+                        g_state.browser.data_pack.reset();
+                        g_state.tasks.scan_complete = false;
+                        g_state.browser.selected_node = nullptr;
+                        g_state.browser.selected_nodes.clear();
+                        g_state.browser.expanded_folders.clear();
+                        g_state.preview.has_preview = false;
+                        g_state.preview.error = "";
+                        g_state.preview.atlas_preview = "";
+                        g_state.preview.json_preview = "";
+                        g_state.preview.atlas_full = "";
+                        g_state.database.column_names.clear();
+                        g_state.database.rows.clear();
+                        g_state.browser.search_query = "";
+                        memset(g_state.browser.search_buffer, 0, sizeof(g_state.browser.search_buffer));
+                        g_state.preview.mode = PreviewMode::None;
+                        if (g_state.spine.build_future.valid())
+                            g_state.spine.build_future.wait();
+                        g_state.spine.dictionary.Clear();
+                        g_state.spine.show_window = false;
+                        g_state.spine.selected_index = -1;
+                        memset(g_state.spine.search_buffer, 0, sizeof(g_state.spine.search_buffer));
+                        g_state.spine.search_query = "";
+                        if (g_state.spine.viewer)
+                            g_state.spine.viewer->unload();
+                        g_state.spine.viewer.reset();
+                        g_state.spine.expanded_categories.clear();
+                        g_state.diff.show_tree = false;
+                        g_state.diff.root.reset();
+                        g_state.diff.visible_nodes.clear();
+                        g_state.diff.expanded_folders.clear();
+                        g_state.diff.selected_nodes.clear();
+                        g_state.diff.selected_node = nullptr;
 
-                        data_pack = std::make_unique<DataPack>(wpath);
-                        if (data_pack->GetType() == DataPack::PackType::Unknown)
+                        g_state.browser.data_pack = std::make_unique<DataPack>(wpath);
+                        if (g_state.browser.data_pack->GetType() == DataPack::PackType::Unknown)
                         {
-                            status_text = "Error: Invalid or unknown file.";
-                            data_pack = nullptr;
+                            g_state.tasks.status = "Error: Invalid or unknown file.";
+                            g_state.browser.data_pack = nullptr;
                         }
                         else
                         {
-                            status_text = "Loaded. Click 'Scan Tree' to analyze contents.";
+                            g_state.tasks.status = "Loaded. Click 'Scan Tree' to analyze contents.";
                         }
                     }
                 }
                 catch (const std::exception &e)
                 {
-                    status_text = "Error opening file: " + std::string(e.what());
+                    g_state.tasks.status = "Error opening file: " + std::string(e.what());
                 }
             }
-            else if (is_task_running || pack_already_loaded)
+            else if (g_state.tasks.running || pack_already_loaded)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Open Pack");
                 nk_widget_disable_end(ctx);
             }
 
-            if (enable_open_folder)
+            if (g_state.common.enable_open_folder)
             {
                 if (can_open_pack && nk_button_label_styled(ctx, &btn_style, "Open Folder"))
                 {
@@ -2732,55 +2777,57 @@ int main(int argc, char *argv[])
                             MultiByteToWideChar(CP_UTF8, 0, selected_path.c_str(),
                                                 (int)selected_path.size(), &wpath[0], size_needed);
 
-                            data_pack.reset();
-                            is_scan_complete = false;
-                            selected_node = nullptr;
-                            selected_file_nodes.clear();
-                            expanded_folders.clear();
-                            has_preview = false;
-                            preview_error = "";
-                            preview_atlas_data = "";
-                            preview_json_data = "";
-                            full_atlas_data = "";
-                            db_column_names.clear();
-                            db_rows.clear();
-                            search_query = "";
-                            memset(search_buffer, 0, sizeof(search_buffer));
-                            current_preview_mode = PreviewMode::None;
-                            if (spine_build_future.valid()) spine_build_future.wait();
-                            spine_dictionary.Clear();
-                            show_spine_viewer = false;
-                            spine_selected_index = -1;
-                            memset(spine_search_buffer, 0, sizeof(spine_search_buffer));
-                            spine_search_query = "";
-                            if (active_spine_viewer) active_spine_viewer->unload();
-                            active_spine_viewer.reset();
-                            spine_expanded_categories.clear();
-                            show_diff_tree = false;
-                            diff_root.reset();
-                            visible_diff_nodes.clear();
-                            expanded_diff_folders.clear();
-                            selected_diff_nodes.clear();
-                            selected_diff_node = nullptr;
+                            g_state.browser.data_pack.reset();
+                            g_state.tasks.scan_complete = false;
+                            g_state.browser.selected_node = nullptr;
+                            g_state.browser.selected_nodes.clear();
+                            g_state.browser.expanded_folders.clear();
+                            g_state.preview.has_preview = false;
+                            g_state.preview.error = "";
+                            g_state.preview.atlas_preview = "";
+                            g_state.preview.json_preview = "";
+                            g_state.preview.atlas_full = "";
+                            g_state.database.column_names.clear();
+                            g_state.database.rows.clear();
+                            g_state.browser.search_query = "";
+                            memset(g_state.browser.search_buffer, 0, sizeof(g_state.browser.search_buffer));
+                            g_state.preview.mode = PreviewMode::None;
+                            if (g_state.spine.build_future.valid())
+                                g_state.spine.build_future.wait();
+                            g_state.spine.dictionary.Clear();
+                            g_state.spine.show_window = false;
+                            g_state.spine.selected_index = -1;
+                            memset(g_state.spine.search_buffer, 0, sizeof(g_state.spine.search_buffer));
+                            g_state.spine.search_query = "";
+                            if (g_state.spine.viewer)
+                                g_state.spine.viewer->unload();
+                            g_state.spine.viewer.reset();
+                            g_state.spine.expanded_categories.clear();
+                            g_state.diff.show_tree = false;
+                            g_state.diff.root.reset();
+                            g_state.diff.visible_nodes.clear();
+                            g_state.diff.expanded_folders.clear();
+                            g_state.diff.selected_nodes.clear();
+                            g_state.diff.selected_node = nullptr;
 
-                            data_pack = std::make_unique<DataPack>(wpath);
-                            if (data_pack->GetType() == DataPack::PackType::Unknown)
+                            g_state.browser.data_pack = std::make_unique<DataPack>(wpath);
+                            if (g_state.browser.data_pack->GetType() == DataPack::PackType::Unknown)
                             {
-                                status_text = "Error: Invalid or unknown folder.";
-                                data_pack = nullptr;
+                                g_state.tasks.status = "Error: Invalid or unknown folder.";
+                                g_state.browser.data_pack = nullptr;
                             }
                             else
                             {
-                                status_text = "Folder Loaded. Click 'Scan Tree' to build the view.";
+                                g_state.tasks.status = "Folder Loaded. Click 'Scan Tree' to build the view.";
                             }
                         }
                     }
                     catch (const std::exception &e)
                     {
-                        status_text = "Error opening folder: " + std::string(e.what());
+                        g_state.tasks.status = "Error opening folder: " + std::string(e.what());
                     }
                 }
-                else if (is_task_running || pack_already_loaded)
+                else if (g_state.tasks.running || pack_already_loaded)
                 {
                     nk_widget_disable_begin(ctx);
                     nk_button_label_styled(ctx, &btn_style, "Open Folder");
@@ -2788,80 +2835,82 @@ int main(int argc, char *argv[])
                 }
             }
 
-            if (pack_loaded && !tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Scan Tree"))
+            if (pack_loaded && !tree_scanned && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, "Scan Tree"))
             {
                 try
                 {
-                    is_task_running = true;
-                    is_scan_complete = false;
-                    status_text = "Scanning...";
-                    task_progress = 0.0f;
+                    g_state.tasks.running = true;
+                    g_state.tasks.scan_complete = false;
+                    g_state.tasks.status = "Scanning...";
+                    g_state.tasks.progress = 0.0f;
 
-                    expanded_folders.clear();
-                    selected_node = nullptr;
-                    selected_file_nodes.clear();
-                    last_clicked_node = nullptr;
-                    has_preview = false;
-                    preview_error = "";
-                    preview_atlas_data = "";
-                    preview_json_data = "";
-                    full_atlas_data = "";
-                    db_column_names.clear();
-                    db_rows.clear();
-                    current_preview_mode = PreviewMode::None;
+                    g_state.browser.expanded_folders.clear();
+                    g_state.browser.selected_node = nullptr;
+                    g_state.browser.selected_nodes.clear();
+                    g_state.browser.last_clicked_node = nullptr;
+                    g_state.preview.has_preview = false;
+                    g_state.preview.error = "";
+                    g_state.preview.atlas_preview = "";
+                    g_state.preview.json_preview = "";
+                    g_state.preview.atlas_full = "";
+                    g_state.database.column_names.clear();
+                    g_state.database.rows.clear();
+                    g_state.preview.mode = PreviewMode::None;
 
-                    if (preview_texture)
+                    if (g_state.preview.texture)
                     {
-                        glDeleteTextures(1, &preview_texture);
-                        preview_texture = 0;
+                        glDeleteTextures(1, &g_state.preview.texture);
+                        g_state.preview.texture = 0;
                     }
-                    task_future = std::async(std::launch::async, []
-                                             {
+                    g_state.tasks.future = std::async(std::launch::async, []{
                         try {
-                            data_pack->Scan(task_progress);
-                        }
-                        catch (...) {} });
+                            g_state.browser.data_pack->Scan(g_state.tasks.progress);
+                        }catch (...) {} });
                 }
                 catch (const std::exception &e)
                 {
-                    status_text = "Error starting scan: " + std::string(e.what());
-                    is_task_running = false;
+                    g_state.tasks.status = "Error starting scan: " + std::string(e.what());
+                    g_state.tasks.running = false;
                 }
             }
-            else if (!pack_loaded || tree_scanned || is_task_running)
+            else if (!pack_loaded || tree_scanned || g_state.tasks.running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Scan Tree");
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, show_spine_viewer ? "File Tree" : "Spine Viewer"))
+            if (tree_scanned && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, g_state.spine.show_window ? "File Tree" : "Spine Viewer"))
             {
-                if (!show_spine_viewer) {
-                    if (!spine_dictionary.IsBuilt() && !spine_building) {
-                        spine_building = true;
-                        spine_build_future = std::async(std::launch::async, []() {
-                            try {
-                                spine_dictionary.Build(*data_pack, data_pack->GetFileTree());
-                            } catch (...) {}
-                            spine_building = false;
-                        });
+                if (!g_state.spine.show_window)
+                {
+                    if (!g_state.spine.dictionary.IsBuilt() && !g_state.spine.building)
+                    {
+                        g_state.spine.building = true;
+                        g_state.spine.build_future = std::async(std::launch::async, []()
+                                                                {
+                                    try {
+                                        g_state.spine.dictionary.Build(*g_state.browser.data_pack, g_state.browser.data_pack->GetFileTree());
+                                    } catch (...) {}
+                                    g_state.spine.building = false; });
                     }
                     set_spine_viewer_mode();
-                } else {
+                }
+                else
+                {
                     set_file_tree_mode();
                 }
             }
-            else if (!tree_scanned || is_task_running)
+            else if (!tree_scanned || g_state.tasks.running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Spine Viewer");
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, show_diff_tree ? "File Tree" : "Diff Viewer"))
+            if (tree_scanned && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, g_state.diff.show_tree ? "File Tree" : "Diff Viewer"))
             {
-                if (show_diff_tree)
+                if (g_state.diff.show_tree)
                 {
                     set_file_tree_mode();
                 }
@@ -2870,14 +2919,14 @@ int main(int argc, char *argv[])
                     activate_diff_viewer();
                 }
             }
-            else if (!tree_scanned || is_task_running)
+            else if (!tree_scanned || g_state.tasks.running)
             {
                 nk_widget_disable_begin(ctx);
-                nk_button_label_styled(ctx, &btn_style, show_diff_tree ? "File Tree" : "Diff Viewer");
+                nk_button_label_styled(ctx, &btn_style, g_state.diff.show_tree ? "File Tree" : "Diff Viewer");
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !show_spine_viewer && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Extract All"))
+            if (tree_scanned && !g_state.spine.show_window && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, "Extract All"))
             {
                 try
                 {
@@ -2886,32 +2935,32 @@ int main(int argc, char *argv[])
                     {
                         std::string dest_str = d.result();
                         std::wstring dest_path(dest_str.begin(), dest_str.end());
-                        is_task_running = true;
-                        status_text = "Extracting all files...";
-                        task_progress = 0.0f;
-                        bool convert_sct = (export_sct_as_png != 0);
-                        bool convert_db = (export_db_as_json != 0);
-                        task_future = std::async(std::launch::async, [dest_path, convert_sct, convert_db]()
+                        g_state.tasks.running = true;
+                        g_state.tasks.status = "Extracting all files...";
+                        g_state.tasks.progress = 0.0f;
+                        bool convert_sct = (g_state.common.export_sct_as_png != 0);
+                        bool convert_db = (g_state.common.export_db_as_json != 0);
+                        g_state.tasks.future = std::async(std::launch::async, [dest_path, convert_sct, convert_db]()
                                                  {
                             try {
-                                data_pack->Extract(data_pack->GetFileTree(), dest_path, task_progress, convert_sct, convert_db);
+                                g_state.browser.data_pack->Extract(g_state.browser.data_pack->GetFileTree(), dest_path, g_state.tasks.progress, convert_sct, convert_db);
                             }
                             catch (...) {} });
                     }
                 }
                 catch (const std::exception &e)
                 {
-                    status_text = "Error starting extraction: " + std::string(e.what());
+                    g_state.tasks.status = "Error starting extraction: " + std::string(e.what());
                 }
             }
-            else if (!tree_scanned || is_task_running || show_spine_viewer)
+            else if (!tree_scanned || g_state.tasks.running || g_state.spine.show_window)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Extract All");
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !show_spine_viewer && has_extract_selection && !is_task_running &&
+            if (tree_scanned && !g_state.spine.show_window && has_extract_selection && !g_state.tasks.running &&
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected"))
             {
 
@@ -2922,32 +2971,32 @@ int main(int argc, char *argv[])
                     {
                         std::string dest_str = d.result();
                         std::wstring dest_path(dest_str.begin(), dest_str.end());
-                        is_task_running = true;
+                        g_state.tasks.running = true;
                         std::vector<const Core::FileNode *> nodes_to_extract;
-                        nodes_to_extract.reserve(selected_file_nodes.size() + 1);
-                        for (const auto *n : selected_file_nodes)
+                        nodes_to_extract.reserve(g_state.browser.selected_nodes.size() + 1);
+                        for (const auto *n : g_state.browser.selected_nodes)
                         {
                             if (n)
                                 nodes_to_extract.push_back(n);
                         }
-                        if (nodes_to_extract.empty() && selected_node)
+                        if (nodes_to_extract.empty() && g_state.browser.selected_node)
                         {
-                            nodes_to_extract.push_back(selected_node);
+                            nodes_to_extract.push_back(g_state.browser.selected_node);
                         }
 
-                        status_text = "Extracting " + std::to_string(nodes_to_extract.size()) + " item(s)...";
-                        task_progress = 0.0f;
-                        bool convert_sct = (export_sct_as_png != 0);
-                        bool convert_db = (export_db_as_json != 0);
-                        task_future = std::async(std::launch::async, [dest_path, nodes_to_extract, convert_sct, convert_db]()
+                        g_state.tasks.status = "Extracting " + std::to_string(nodes_to_extract.size()) + " item(s)...";
+                        g_state.tasks.progress = 0.0f;
+                        bool convert_sct = (g_state.common.export_sct_as_png != 0);
+                        bool convert_db = (g_state.common.export_db_as_json != 0);
+                        g_state.tasks.future = std::async(std::launch::async, [dest_path, nodes_to_extract, convert_sct, convert_db]()
                                                  {
                             try {
                                 const float total = nodes_to_extract.empty() ? 1.0f : (float)nodes_to_extract.size();
                                 for (size_t i = 0; i < nodes_to_extract.size(); i++)
                                 {
                                     std::atomic<float> local_progress = 0.0f;
-                                    data_pack->Extract(*nodes_to_extract[i], dest_path, local_progress, convert_sct, convert_db);
-                                    task_progress = (float)(i + 1) / total;
+                                    g_state.browser.data_pack->Extract(*nodes_to_extract[i], dest_path, local_progress, convert_sct, convert_db);
+                                    g_state.tasks.progress = (float)(i + 1) / total;
                                 }
                             }
                             catch (...) {} });
@@ -2955,499 +3004,592 @@ int main(int argc, char *argv[])
                 }
                 catch (const std::exception &e)
                 {
-                    status_text = "Error starting extraction: " + std::string(e.what());
+                    g_state.tasks.status = "Error starting extraction: " + std::string(e.what());
                 }
             }
-            else if (!tree_scanned || !has_extract_selection || is_task_running || show_spine_viewer)
+            else if (!tree_scanned || !has_extract_selection || g_state.tasks.running || g_state.spine.show_window)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Extract Selected");
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, "Export filemap JSON"))
+            if (tree_scanned && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, "Export filemap JSON"))
             {
                 export_to_json();
             }
-            else if (!tree_scanned || is_task_running)
+            else if (!tree_scanned || g_state.tasks.running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Export filemap JSON");
                 nk_widget_disable_end(ctx);
             }
 
-            if (!is_task_running && nk_button_label_styled(ctx, &btn_style, "Options"))
+            if (!g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, "Options"))
             {
-                show_export_options_window = true;
+                g_state.common.show_options = true;
             }
-            else if (is_task_running)
+            else if (g_state.tasks.running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Options");
                 nk_widget_disable_end(ctx);
             }
 
-
-
             if (nk_button_label_styled(ctx, &btn_style, "Credits"))
             {
-                show_credits_window = true;
+                g_state.credits.show_window = true;
             }
 
             float content_height = (float)window_height - 85;
 
-          if (!show_spine_viewer) {
-            nk_layout_row_begin(ctx, NK_STATIC, 30, 2);
-            nk_layout_row_push(ctx, 80);
-            nk_label(ctx, "Search:", NK_TEXT_LEFT);
-            nk_layout_row_push(ctx, 300);
-            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, search_buffer, sizeof(search_buffer), nk_filter_default);
-            search_query = search_buffer;
-            nk_layout_row_end(ctx);
-            bool showing_preview_panel = (current_preview_mode != PreviewMode::None || !preview_error.empty());
-
-            static float sidebar_width = 600.0f;
-            static bool dragging_splitter = false;
-            float min_sidebar = 300.0f;
-            float max_sidebar = (float)window_width * 0.7f;
-            if (sidebar_width < min_sidebar)
-                sidebar_width = min_sidebar;
-            if (sidebar_width > max_sidebar)
-                sidebar_width = max_sidebar;
-
-            float left_width = showing_preview_panel ? sidebar_width : (float)window_width - 20.0f;
-            float right_width = (float)window_width - left_width - 30.0f;
-
-            nk_layout_row_begin(ctx, NK_STATIC, content_height, (showing_preview_panel) ? 3 : 1);
-            nk_layout_row_push(ctx, left_width);
-
-            if (nk_group_begin(ctx, "FileTree", NK_WINDOW_BORDER | NK_WINDOW_TITLE))
+            if (!g_state.spine.show_window)
             {
-                visible_nodes.clear();
+                nk_layout_row_begin(ctx, NK_STATIC, 30, 2);
+                nk_layout_row_push(ctx, 80);
+                nk_label(ctx, "Search:", NK_TEXT_LEFT);
+                nk_layout_row_push(ctx, 300);
+                nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, g_state.browser.search_buffer, sizeof(g_state.browser.search_buffer), nk_filter_default);
+                g_state.browser.search_query = g_state.browser.search_buffer;
+                nk_layout_row_end(ctx);
+                bool showing_preview_panel = (g_state.preview.mode != PreviewMode::None || !g_state.preview.error.empty());
 
-                if (data_pack && tree_scanned)
+                static float sidebar_width = 600.0f;
+                static bool dragging_splitter = false;
+                float min_sidebar = 300.0f;
+                float max_sidebar = (float)window_width * 0.7f;
+                if (sidebar_width < min_sidebar)
+                    sidebar_width = min_sidebar;
+                if (sidebar_width > max_sidebar)
+                    sidebar_width = max_sidebar;
+
+                float left_width = showing_preview_panel ? sidebar_width : (float)window_width - 20.0f;
+                float right_width = (float)window_width - left_width - 30.0f;
+
+                nk_layout_row_begin(ctx, NK_STATIC, content_height, (showing_preview_panel) ? 3 : 1);
+                nk_layout_row_push(ctx, left_width);
+
+                if (nk_group_begin(ctx, "FileTree", NK_WINDOW_BORDER | NK_WINDOW_TITLE))
                 {
-                    if (show_diff_tree && diff_root)
+                    g_state.browser.visible_nodes.clear();
+
+                    if (g_state.browser.data_pack && tree_scanned)
                     {
-                        draw_diff_node(ctx, *diff_root);
-
-                        if (scroll_to_selected && selected_diff_node)
+                        if (g_state.diff.show_tree && g_state.diff.root)
                         {
-                            auto it = std::find(visible_diff_nodes.begin(), visible_diff_nodes.end(), selected_diff_node);
-                            if (it != visible_diff_nodes.end())
+                            draw_diff_node(ctx, *g_state.diff.root);
+
+                            if (scroll_to_selected && g_state.diff.selected_node)
                             {
-                                int index = std::distance(visible_diff_nodes.begin(), it);
-                                nk_uint current_x, current_y;
-                                nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
-
-                                float row_height = 26.0f + ctx->style.window.spacing.y;
-                                float node_y = index * row_height;
-                                float view_h = nk_window_get_content_region(ctx).h;
-
-                                float top_margin = row_height * 2.0f;
-                                float bottom_margin = row_height * 2.0f;
-                                float visible_top = (float)current_y + top_margin;
-                                float visible_bottom = (float)current_y + view_h - bottom_margin;
-
-                                if (node_y < visible_top)
+                                auto it = std::find(g_state.diff.visible_nodes.begin(), g_state.diff.visible_nodes.end(), g_state.diff.selected_node);
+                                if (it != g_state.diff.visible_nodes.end())
                                 {
-                                    float target = node_y - top_margin;
-                                    if (target < 0.0f) target = 0.0f;
-                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
-                                }
-                                else if (node_y + row_height > visible_bottom)
-                                {
-                                    float target = node_y + row_height - view_h + bottom_margin;
-                                    if (target < 0.0f) target = 0.0f;
-                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
-                                }
-                            }
-                            scroll_to_selected = false;
-                        }
-                    }
-                    else
-                    {
-                        draw_file_node(ctx, data_pack->GetFileTree());
+                                    int index = std::distance(g_state.diff.visible_nodes.begin(), it);
+                                    nk_uint current_x, current_y;
+                                    nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
 
-                        if (scroll_to_selected && selected_node)
-                        {
-                            auto it = std::find(visible_nodes.begin(), visible_nodes.end(), selected_node);
-                            if (it != visible_nodes.end())
-                            {
-                                int index = std::distance(visible_nodes.begin(), it);
-                                nk_uint current_x, current_y;
-                                nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
+                                    float row_height = 26.0f + ctx->style.window.spacing.y;
+                                    float node_y = index * row_height;
+                                    float view_h = nk_window_get_content_region(ctx).h;
 
-                                float row_height = 26.0f + ctx->style.window.spacing.y;
-                                float node_y = index * row_height;
-                                float view_h = nk_window_get_content_region(ctx).h;
+                                    float top_margin = row_height * 2.0f;
+                                    float bottom_margin = row_height * 2.0f;
+                                    float visible_top = (float)current_y + top_margin;
+                                    float visible_bottom = (float)current_y + view_h - bottom_margin;
 
-                                float top_margin = row_height * 2.0f;
-                                float bottom_margin = row_height * 2.0f;
-                                float visible_top = (float)current_y + top_margin;
-                                float visible_bottom = (float)current_y + view_h - bottom_margin;
-
-                                if (node_y < visible_top)
-                                {
-                                    float target = node_y - top_margin;
-                                    if (target < 0.0f) target = 0.0f;
-                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
-                                }
-                                else if (node_y + row_height > visible_bottom)
-                                {
-                                    float target = node_y + row_height - view_h + bottom_margin;
-                                    if (target < 0.0f) target = 0.0f;
-                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
-                                }
-                            }
-                            scroll_to_selected = false;
-                        }
-                    }
-                }
-                else if (data_pack && is_task_running)
-                {
-                    nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
-                    nk_layout_row_push(ctx, 10.0f);
-                    nk_spacing(ctx, 1);
-
-                    nk_layout_row_push(ctx, 24.0f);
-                    struct nk_style_button expand_style = ctx->style.button;
-                    expand_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
-                    expand_style.hover = nk_style_item_color(nk_rgb(60, 60, 65));
-                    expand_style.text_normal = nk_rgb(150, 150, 150);
-                    expand_style.rounding = 3.0f;
-
-                    nk_widget_disable_begin(ctx);
-                    nk_button_label_styled(ctx, &expand_style, "+");
-                    nk_widget_disable_end(ctx);
-
-                    nk_layout_row_push(ctx, 370.0f);
-                    struct nk_style_button button_style = ctx->style.button;
-                    button_style.normal = nk_style_item_color(nk_rgb(35, 35, 38));
-                    button_style.hover = nk_style_item_color(nk_rgb(35, 35, 38));
-                    button_style.active = nk_style_item_color(nk_rgb(35, 35, 38));
-                    button_style.text_normal = nk_rgb(220, 220, 220);
-                    button_style.text_alignment = NK_TEXT_LEFT;
-                    button_style.padding = nk_vec2(8, 4);
-                    button_style.rounding = 3.0f;
-                    nk_button_label_styled(ctx, &button_style, data_pack->GetFileTree().name.c_str());
-
-                    nk_layout_row_push(ctx, 200.0f);
-                    std::string info = std::to_string(data_pack->GetParsedFileCount()) + " items | " + format_size(data_pack->GetParsedTotalSize());
-                    nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
-                    nk_layout_row_end(ctx);
-                }
-                else if (data_pack)
-                {
-                    nk_layout_row_dynamic(ctx, 25, 1);
-                    nk_label(ctx, "Click 'Scan Tree' to load files...", NK_TEXT_CENTERED);
-                }
-                else
-                {
-                    nk_layout_row_dynamic(ctx, 25, 1);
-                    nk_label(ctx, "No pack file loaded.", NK_TEXT_CENTERED);
-                }
-                nk_group_end(ctx);
-            }
-
-            if (showing_preview_panel)
-            {
-                struct nk_rect bounds;
-                nk_layout_row_push(ctx, 8.0f);
-                bounds = nk_widget_bounds(ctx);
-                nk_input *in = &ctx->input;
-
-                bool hovering_splitter = nk_input_is_mouse_hovering_rect(in, bounds);
-                bool mouse_down = nk_input_is_mouse_down(in, NK_BUTTON_LEFT);
-
-                if (hovering_splitter && mouse_down && !dragging_splitter)
-                {
-                    dragging_splitter = true;
-                }
-
-                if (!mouse_down)
-                {
-                    dragging_splitter = false;
-                }
-
-                if (dragging_splitter || hovering_splitter)
-                {
-                    SDL_SetCursor(resize_cursor);
-                }
-                else
-                {
-                    SDL_SetCursor(arrow_cursor);
-                }
-
-                if (dragging_splitter)
-                {
-                    sidebar_width += ctx->input.mouse.delta.x;
-                }
-
-                // Draw splitter handle
-                nk_fill_rect(&ctx->current->buffer, bounds, 0, nk_rgb(40, 40, 45));
-                nk_stroke_line(&ctx->current->buffer, bounds.x + 4, bounds.y + 10, bounds.x + 4, bounds.y + bounds.h - 10, 1.0f, nk_rgb(100, 100, 100));
-
-                nk_layout_row_push(ctx, right_width - 8.0f);
-                if (nk_group_begin(ctx, "Preview", NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR))
-                {
-
-                    if (current_preview_mode == PreviewMode::Image)
-                    {
-                        nk_layout_row_dynamic(ctx, 30, 1);
-                        if (selected_node)
-                        {
-                            std::string title = "Preview: " + selected_node->name;
-                            nk_label(ctx, title.c_str(), NK_TEXT_CENTERED);
-                        }
-
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        std::string dims = std::to_string(preview_width) + " x " + std::to_string(preview_height);
-                        nk_label_colored(ctx, dims.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
-
-                        if (selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data))
-                        {
-                            const auto &info = std::get<Core::FileInfo>(selected_node->data);
-                            nk_layout_row_dynamic(ctx, 25, 1);
-                            std::string size_str = "Size: " + format_size(info.size);
-                            nk_label_colored(ctx, size_str.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
-                        }
-
-                        if (selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data))
-                        {
-                            const auto &info = std::get<Core::FileInfo>(selected_node->data);
-                            if (is_previewable_format(info.format))
-                            {
-                                nk_layout_row_dynamic(ctx, 30, 1);
-                                if (nk_button_label(ctx, "Open in Window"))
-                                {
-                                    open_image_preview_window(*selected_node);
-                                }
-                            }
-                        }
-
-                        float max_preview_width = right_width - 40.0f;
-                        float max_preview_height = content_height - 180.0f;
-
-                        float scale_w = max_preview_width / preview_width;
-                        float scale_h = max_preview_height / preview_height;
-                        float scale = (scale_w < scale_h) ? scale_w : scale_h;
-                        if (scale > 1.0f)
-                            scale = 1.0f;
-
-                        float display_width = preview_width * scale;
-                        float display_height = preview_height * scale;
-
-                        nk_layout_row_begin(ctx, NK_STATIC, display_height, 1);
-                        nk_layout_row_push(ctx, display_width);
-                        struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
-                        struct nk_rect bounds = nk_widget_bounds(ctx);
-                        struct nk_image img = nk_image_id((int)preview_texture);
-                        nk_draw_image(canvas, bounds, &img, nk_rgb(255, 255, 255));
-                        nk_layout_row_end(ctx);
-                    }
-                    else if (current_preview_mode == PreviewMode::DB)
-                    {
-                        if (selected_node)
-                        {
-                            nk_layout_row_dynamic(ctx, 30, 1);
-                            std::string title = "Database Preview: " + db_filename;
-                            nk_label_colored(ctx, title.c_str(), NK_TEXT_CENTERED, nk_rgb(150, 200, 255));
-                        }
-
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        std::string stats = std::to_string(db_rows.size()) + " rows x " + std::to_string(db_column_names.size()) + " columns";
-                        nk_label_colored(ctx, stats.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
-
-                        nk_layout_row_dynamic(ctx, 30, 1);
-                        if (nk_button_label(ctx, "Export as JSON"))
-                        {
-                            export_db_as_json_file(*selected_node);
-                        }
-
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        nk_label_colored(ctx, "Preview:", NK_TEXT_LEFT, nk_rgb(200, 200, 200));
-
-                        static char db_search_buffer[128] = "";
-                        nk_layout_row_begin(ctx, NK_STATIC, 28, 2);
-                        nk_layout_row_push(ctx, 80);
-                        nk_label(ctx, "Search:", NK_TEXT_LEFT);
-                        nk_layout_row_push(ctx, right_width - 100);
-                        nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, db_search_buffer, sizeof(db_search_buffer), nk_filter_default);
-                        nk_layout_row_end(ctx);
-
-                        float preview_table_height = content_height - 230;
-                        nk_layout_row_dynamic(ctx, preview_table_height, 1);
-
-                        if (nk_group_begin(ctx, "DBPreviewTable", NK_WINDOW_BORDER))
-                        {
-                            float base_width = 100.0f;
-                            std::vector<float> col_widths(db_column_names.size(), base_width);
-                            for (size_t j = 0; j < db_column_names.size(); j++)
-                            {
-                                size_t max_len = db_column_names[j].length();
-                                for (const auto &row : db_rows)
-                                {
-                                    if (j < row.size() && row[j].length() > max_len)
-                                        max_len = row[j].length();
-                                }
-                                col_widths[j] = std::min(std::max(7.5f * max_len, 120.0f), 400.0f);
-                            }
-
-                            float index_col_width = 60.0f;
-
-                            nk_layout_row_begin(ctx, NK_STATIC, 40, (int)db_column_names.size() + 1);
-
-                            nk_layout_row_push(ctx, index_col_width);
-                            struct nk_rect bounds = nk_widget_bounds(ctx);
-                            nk_fill_rect(&ctx->current->buffer, bounds, 0, nk_rgb(60, 70, 90));
-                            nk_label_colored(ctx, "#", NK_TEXT_CENTERED, nk_rgb(220, 230, 255));
-
-                            for (size_t j = 0; j < db_column_names.size(); j++)
-                            {
-                                nk_layout_row_push(ctx, col_widths[j]);
-                                struct nk_rect col_bounds = nk_widget_bounds(ctx);
-                                nk_fill_rect(&ctx->current->buffer, col_bounds, 0, nk_rgb(60, 70, 90));
-                                nk_label_colored(ctx, db_column_names[j].c_str(), NK_TEXT_CENTERED, nk_rgb(220, 230, 255));
-                            }
-                            nk_layout_row_end(ctx);
-
-                            size_t preview_rows = db_rows.size();
-                            int visible_index = 1;
-                            int rows_shown = 0;
-                            for (size_t i = 0; i < preview_rows; i++)
-                            {
-                                if (rows_shown > 200)
-                                    break; // rows limit for performance
-
-                                bool match = false;
-                                if (strlen(db_search_buffer) == 0)
-                                {
-                                    match = true;
-                                }
-                                else
-                                {
-                                    std::string q = db_search_buffer;
-                                    for (const auto &cell : db_rows[i])
+                                    if (node_y < visible_top)
                                     {
-                                        if (cell.find(q) != std::string::npos)
-                                        {
-                                            match = true;
-                                            break;
-                                        }
+                                        float target = node_y - top_margin;
+                                        if (target < 0.0f)
+                                            target = 0.0f;
+                                        nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                    }
+                                    else if (node_y + row_height > visible_bottom)
+                                    {
+                                        float target = node_y + row_height - view_h + bottom_margin;
+                                        if (target < 0.0f)
+                                            target = 0.0f;
+                                        nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
                                     }
                                 }
-
-                                if (!match)
-                                    continue;
-                                rows_shown++;
-
-                                struct nk_color row_color = (visible_index % 2 == 0) ? nk_rgb(45, 45, 50) : nk_rgb(40, 40, 45);
-                                nk_layout_row_begin(ctx, NK_STATIC, 38, (int)db_column_names.size() + 1);
-
-                                nk_layout_row_push(ctx, index_col_width);
-                                struct nk_rect index_bounds = nk_widget_bounds(ctx);
-                                nk_fill_rect(&ctx->current->buffer, index_bounds, 0, row_color);
-
-                                std::string row_index = std::to_string(visible_index++);
-                                nk_label_colored(ctx, row_index.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 200, 255));
-
-                                for (size_t j = 0; j < db_rows[i].size(); j++)
-                                {
-                                    nk_layout_row_push(ctx, col_widths[j]);
-                                    struct nk_rect cell_bounds = nk_widget_bounds(ctx);
-                                    nk_fill_rect(&ctx->current->buffer, cell_bounds, 0, row_color);
-
-                                    std::string cell_text = db_rows[i][j];
-                                    int max_chars = (int)(col_widths[j] / 7);
-                                    if (cell_text.length() > max_chars)
-                                        cell_text = cell_text.substr(0, max_chars - 3) + "...";
-
-                                    nk_label_colored(ctx, cell_text.c_str(), NK_TEXT_LEFT, nk_rgb(200, 200, 200));
-                                }
-                                nk_layout_row_end(ctx);
-                            }
-
-                            if (db_rows.size() > 200)
-                            {
-                                nk_layout_row_dynamic(ctx, 20, 1);
-                                nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
-                            }
-
-                            nk_group_end(ctx);
-                        }
-                    }
-                    else if (current_preview_mode == PreviewMode::JSON)
-                    {
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        nk_label(ctx, "JSON Viewer", NK_TEXT_CENTERED);
-
-                        bool is_db_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_db_file(std::get<Core::FileInfo>(selected_node->data).format);
-                        bool is_scsp_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_scsp_file(std::get<Core::FileInfo>(selected_node->data).format);
-                        bool is_json_source = selected_node && std::holds_alternative<Core::FileInfo>(selected_node->data) && is_json_file(std::get<Core::FileInfo>(selected_node->data).format);
-
-                        if (is_scsp_source)
-                        {
-                            nk_layout_row_dynamic(ctx, 30, 1);
-                            if (nk_button_label(ctx, "Export as JSON"))
-                            {
-                                export_scsp_as_json_file(*selected_node);
+                                scroll_to_selected = false;
                             }
                         }
                         else
                         {
-                            nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
+                            draw_file_node(ctx, g_state.browser.data_pack->GetFileTree());
 
-                            if (is_db_source || is_json_source)
+                            if (scroll_to_selected && g_state.browser.selected_node)
                             {
-                                nk_layout_row_push(ctx, 120);
-                                if (nk_button_label(ctx, "Export as JSON"))
+                                auto it = std::find(g_state.browser.visible_nodes.begin(), g_state.browser.visible_nodes.end(), g_state.browser.selected_node);
+                                if (it != g_state.browser.visible_nodes.end())
                                 {
-                                    if (is_db_source)
+                                    int index = std::distance(g_state.browser.visible_nodes.begin(), it);
+                                    nk_uint current_x, current_y;
+                                    nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
+
+                                    float row_height = 26.0f + ctx->style.window.spacing.y;
+                                    float node_y = index * row_height;
+                                    float view_h = nk_window_get_content_region(ctx).h;
+
+                                    float top_margin = row_height * 2.0f;
+                                    float bottom_margin = row_height * 2.0f;
+                                    float visible_top = (float)current_y + top_margin;
+                                    float visible_bottom = (float)current_y + view_h - bottom_margin;
+
+                                    if (node_y < visible_top)
                                     {
-                                        export_db_as_json_file(*selected_node);
+                                        float target = node_y - top_margin;
+                                        if (target < 0.0f)
+                                            target = 0.0f;
+                                        nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                    }
+                                    else if (node_y + row_height > visible_bottom)
+                                    {
+                                        float target = node_y + row_height - view_h + bottom_margin;
+                                        if (target < 0.0f)
+                                            target = 0.0f;
+                                        nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                    }
+                                }
+                                scroll_to_selected = false;
+                            }
+                        }
+                    }
+                    else if (g_state.browser.data_pack && g_state.tasks.running)
+                    {
+                        nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
+                        nk_layout_row_push(ctx, 10.0f);
+                        nk_spacing(ctx, 1);
+
+                        nk_layout_row_push(ctx, 24.0f);
+                        struct nk_style_button expand_style = ctx->style.button;
+                        expand_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+                        expand_style.hover = nk_style_item_color(nk_rgb(60, 60, 65));
+                        expand_style.text_normal = nk_rgb(150, 150, 150);
+                        expand_style.rounding = 3.0f;
+
+                        nk_widget_disable_begin(ctx);
+                        nk_button_label_styled(ctx, &expand_style, "+");
+                        nk_widget_disable_end(ctx);
+
+                        nk_layout_row_push(ctx, 370.0f);
+                        struct nk_style_button button_style = ctx->style.button;
+                        button_style.normal = nk_style_item_color(nk_rgb(35, 35, 38));
+                        button_style.hover = nk_style_item_color(nk_rgb(35, 35, 38));
+                        button_style.active = nk_style_item_color(nk_rgb(35, 35, 38));
+                        button_style.text_normal = nk_rgb(220, 220, 220);
+                        button_style.text_alignment = NK_TEXT_LEFT;
+                        button_style.padding = nk_vec2(8, 4);
+                        button_style.rounding = 3.0f;
+                        nk_button_label_styled(ctx, &button_style, g_state.browser.data_pack->GetFileTree().name.c_str());
+
+                        nk_layout_row_push(ctx, 200.0f);
+                        std::string info = std::to_string(g_state.browser.data_pack->GetParsedFileCount()) + " items | " + format_size(g_state.browser.data_pack->GetParsedTotalSize());
+                        nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
+                        nk_layout_row_end(ctx);
+                    }
+                    else if (g_state.browser.data_pack)
+                    {
+                        nk_layout_row_dynamic(ctx, 25, 1);
+                        nk_label(ctx, "Click 'Scan Tree' to load files...", NK_TEXT_CENTERED);
+                    }
+                    else
+                    {
+                        nk_layout_row_dynamic(ctx, 25, 1);
+                        nk_label(ctx, "No pack file loaded.", NK_TEXT_CENTERED);
+                    }
+                    nk_group_end(ctx);
+                }
+
+                if (showing_preview_panel)
+                {
+                    struct nk_rect bounds;
+                    nk_layout_row_push(ctx, 8.0f);
+                    bounds = nk_widget_bounds(ctx);
+                    nk_input *in = &ctx->input;
+
+                    bool hovering_splitter = nk_input_is_mouse_hovering_rect(in, bounds);
+                    bool mouse_down = nk_input_is_mouse_down(in, NK_BUTTON_LEFT);
+
+                    if (hovering_splitter && mouse_down && !dragging_splitter)
+                    {
+                        dragging_splitter = true;
+                    }
+
+                    if (!mouse_down)
+                    {
+                        dragging_splitter = false;
+                    }
+
+                    if (dragging_splitter || hovering_splitter)
+                    {
+                        SDL_SetCursor(resize_cursor);
+                    }
+                    else
+                    {
+                        SDL_SetCursor(arrow_cursor);
+                    }
+
+                    if (dragging_splitter)
+                    {
+                        sidebar_width += ctx->input.mouse.delta.x;
+                    }
+
+                    // Draw splitter handle
+                    nk_fill_rect(&ctx->current->buffer, bounds, 0, nk_rgb(40, 40, 45));
+                    nk_stroke_line(&ctx->current->buffer, bounds.x + 4, bounds.y + 10, bounds.x + 4, bounds.y + bounds.h - 10, 1.0f, nk_rgb(100, 100, 100));
+
+                    nk_layout_row_push(ctx, right_width - 8.0f);
+                    if (nk_group_begin(ctx, "Preview", NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR))
+                    {
+
+                        if (g_state.preview.mode == PreviewMode::Image)
+                        {
+                            nk_layout_row_dynamic(ctx, 30, 1);
+                            if (g_state.browser.selected_node)
+                            {
+                                std::string title = "Preview: " + g_state.browser.selected_node->name;
+                                nk_label(ctx, title.c_str(), NK_TEXT_CENTERED);
+                            }
+
+                            nk_layout_row_dynamic(ctx, 25, 1);
+                            std::string dims = std::to_string(g_state.preview.width) + " x " + std::to_string(g_state.preview.height);
+                            nk_label_colored(ctx, dims.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
+
+                            if (g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
+                            {
+                                const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
+                                nk_layout_row_dynamic(ctx, 25, 1);
+                                std::string size_str = "Size: " + format_size(info.size);
+                                nk_label_colored(ctx, size_str.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
+                            }
+
+                            if (g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
+                            {
+                                const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
+                                if (is_previewable_format(info.format))
+                                {
+                                    nk_layout_row_dynamic(ctx, 30, 1);
+                                    if (nk_button_label(ctx, "Open in Window"))
+                                    {
+                                        open_image_preview_window(*g_state.browser.selected_node);
+                                    }
+                                }
+                            }
+
+                            float max_preview_width = right_width - 40.0f;
+                            float max_preview_height = content_height - 180.0f;
+
+                            float scale_w = max_preview_width / g_state.preview.width;
+                            float scale_h = max_preview_height / g_state.preview.height;
+                            float scale = (scale_w < scale_h) ? scale_w : scale_h;
+                            if (scale > 1.0f)
+                                scale = 1.0f;
+
+                            float display_width = g_state.preview.width * scale;
+                            float display_height = g_state.preview.height * scale;
+
+                            nk_layout_row_begin(ctx, NK_STATIC, display_height, 1);
+                            nk_layout_row_push(ctx, display_width);
+                            struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+                            struct nk_rect bounds = nk_widget_bounds(ctx);
+                            struct nk_image img = nk_image_id((int)g_state.preview.texture);
+                            nk_draw_image(canvas, bounds, &img, nk_rgb(255, 255, 255));
+                            nk_layout_row_end(ctx);
+                        }
+                        else if (g_state.preview.mode == PreviewMode::DB)
+                        {
+                            if (g_state.browser.selected_node)
+                            {
+                                nk_layout_row_dynamic(ctx, 30, 1);
+                                std::string title = "Database Preview: " + g_state.database.filename;
+                                nk_label_colored(ctx, title.c_str(), NK_TEXT_CENTERED, nk_rgb(150, 200, 255));
+                            }
+
+                            nk_layout_row_dynamic(ctx, 25, 1);
+                            std::string stats = std::to_string(g_state.database.rows.size()) + " rows x " + std::to_string(g_state.database.column_names.size()) + " columns";
+                            nk_label_colored(ctx, stats.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
+
+                            nk_layout_row_dynamic(ctx, 30, 1);
+                            if (nk_button_label(ctx, "Export as JSON"))
+                            {
+                                export_db_as_json_file(*g_state.browser.selected_node);
+                            }
+
+                            nk_layout_row_dynamic(ctx, 25, 1);
+                            nk_label_colored(ctx, "Preview:", NK_TEXT_LEFT, nk_rgb(200, 200, 200));
+
+                            static char db_search_buffer[128] = "";
+                            nk_layout_row_begin(ctx, NK_STATIC, 28, 2);
+                            nk_layout_row_push(ctx, 80);
+                            nk_label(ctx, "Search:", NK_TEXT_LEFT);
+                            nk_layout_row_push(ctx, right_width - 100);
+                            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, db_search_buffer, sizeof(db_search_buffer), nk_filter_default);
+                            nk_layout_row_end(ctx);
+
+                            float preview_table_height = content_height - 230;
+                            nk_layout_row_dynamic(ctx, preview_table_height, 1);
+
+                            if (nk_group_begin(ctx, "DBPreviewTable", NK_WINDOW_BORDER))
+                            {
+                                float base_width = 100.0f;
+                                std::vector<float> col_widths(g_state.database.column_names.size(), base_width);
+                                for (size_t j = 0; j < g_state.database.column_names.size(); j++)
+                                {
+                                    size_t max_len = g_state.database.column_names[j].length();
+                                    for (const auto &row : g_state.database.rows)
+                                    {
+                                        if (j < row.size() && row[j].length() > max_len)
+                                            max_len = row[j].length();
+                                    }
+                                    col_widths[j] = std::min(std::max(7.5f * max_len, 120.0f), 400.0f);
+                                }
+
+                                float index_col_width = 60.0f;
+
+                                nk_layout_row_begin(ctx, NK_STATIC, 40, (int)g_state.database.column_names.size() + 1);
+
+                                nk_layout_row_push(ctx, index_col_width);
+                                struct nk_rect bounds = nk_widget_bounds(ctx);
+                                nk_fill_rect(&ctx->current->buffer, bounds, 0, nk_rgb(60, 70, 90));
+                                nk_label_colored(ctx, "#", NK_TEXT_CENTERED, nk_rgb(220, 230, 255));
+
+                                for (size_t j = 0; j < g_state.database.column_names.size(); j++)
+                                {
+                                    nk_layout_row_push(ctx, col_widths[j]);
+                                    struct nk_rect col_bounds = nk_widget_bounds(ctx);
+                                    nk_fill_rect(&ctx->current->buffer, col_bounds, 0, nk_rgb(60, 70, 90));
+                                    nk_label_colored(ctx, g_state.database.column_names[j].c_str(), NK_TEXT_CENTERED, nk_rgb(220, 230, 255));
+                                }
+                                nk_layout_row_end(ctx);
+
+                                size_t preview_rows = g_state.database.rows.size();
+                                int visible_index = 1;
+                                int rows_shown = 0;
+                                for (size_t i = 0; i < preview_rows; i++)
+                                {
+                                    if (rows_shown > 200)
+                                        break; // rows limit for performance
+
+                                    bool match = false;
+                                    if (strlen(g_state.browser.search_buffer) == 0)
+                                    {
+                                        match = true;
                                     }
                                     else
                                     {
-                                        export_json_file(*selected_node);
+                                        std::string q = g_state.browser.search_buffer;
+                                        for (const auto &cell : g_state.database.rows[i])
+                                        {
+                                            if (cell.find(q) != std::string::npos)
+                                            {
+                                                match = true;
+                                                break;
+                                            }
+                                        }
                                     }
+
+                                    if (!match)
+                                        continue;
+                                    rows_shown++;
+
+                                    struct nk_color row_color = (visible_index % 2 == 0) ? nk_rgb(45, 45, 50) : nk_rgb(40, 40, 45);
+                                    nk_layout_row_begin(ctx, NK_STATIC, 38, (int)g_state.database.column_names.size() + 1);
+
+                                    nk_layout_row_push(ctx, index_col_width);
+                                    struct nk_rect index_bounds = nk_widget_bounds(ctx);
+                                    nk_fill_rect(&ctx->current->buffer, index_bounds, 0, row_color);
+
+                                    std::string row_index = std::to_string(visible_index++);
+                                    nk_label_colored(ctx, row_index.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 200, 255));
+
+                                    for (size_t j = 0; j < g_state.database.rows[i].size(); j++)
+                                    {
+                                        nk_layout_row_push(ctx, col_widths[j]);
+                                        struct nk_rect cell_bounds = nk_widget_bounds(ctx);
+                                        nk_fill_rect(&ctx->current->buffer, cell_bounds, 0, row_color);
+
+                                        std::string cell_text = g_state.database.rows[i][j];
+                                        int max_chars = (int)(col_widths[j] / 7);
+                                        if (cell_text.length() > max_chars)
+                                            cell_text = cell_text.substr(0, max_chars - 3) + "...";
+
+                                        nk_label_colored(ctx, cell_text.c_str(), NK_TEXT_LEFT, nk_rgb(200, 200, 200));
+                                    }
+                                    nk_layout_row_end(ctx);
+                                }
+
+                                if (g_state.database.rows.size() > 200)
+                                {
+                                    nk_layout_row_dynamic(ctx, 20, 1);
+                                    nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
+                                }
+
+                                nk_group_end(ctx);
+                            }
+                        }
+                        else if (g_state.preview.mode == PreviewMode::JSON)
+                        {
+                            nk_layout_row_dynamic(ctx, 25, 1);
+                            nk_label(ctx, "JSON Viewer", NK_TEXT_CENTERED);
+
+                            bool is_db_source = g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data) && is_db_file(std::get<Core::FileInfo>(g_state.browser.selected_node->data).format);
+                            bool is_scsp_source = g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data) && is_scsp_file(std::get<Core::FileInfo>(g_state.browser.selected_node->data).format);
+                            bool is_json_source = g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data) && is_json_file(std::get<Core::FileInfo>(g_state.browser.selected_node->data).format);
+
+                            if (is_scsp_source)
+                            {
+                                nk_layout_row_dynamic(ctx, 30, 1);
+                                if (nk_button_label(ctx, "Export as JSON"))
+                                {
+                                    export_scsp_as_json_file(*g_state.browser.selected_node);
                                 }
                             }
                             else
                             {
+                                nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
+
+                                if (is_db_source || is_json_source)
+                                {
+                                    nk_layout_row_push(ctx, 120);
+                                    if (nk_button_label(ctx, "Export as JSON"))
+                                    {
+                                        if (is_db_source)
+                                        {
+                                            export_db_as_json_file(*g_state.browser.selected_node);
+                                        }
+                                        else
+                                        {
+                                            export_json_file(*g_state.browser.selected_node);
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    nk_layout_row_push(ctx, 120);
+                                    nk_label(ctx, "", NK_TEXT_LEFT);
+                                }
+
                                 nk_layout_row_push(ctx, 120);
-                                nk_label(ctx, "", NK_TEXT_LEFT);
+                                if (nk_button_label(ctx, "Copy All"))
+                                {
+                                    SDL_SetClipboardText(g_state.preview.json_preview.c_str());
+                                }
+                                nk_layout_row_push(ctx, 120);
+                                if (nk_button_label(ctx, "Save As..."))
+                                {
+                                    try
+                                    {
+                                        std::string default_name = g_state.browser.selected_node ? g_state.browser.selected_node->name : "output";
+                                        size_t dot_pos = default_name.find_last_of('.');
+                                        if (dot_pos != std::string::npos)
+                                        {
+                                            default_name = default_name.substr(0, dot_pos);
+                                        }
+                                        default_name += ".json";
+
+                                        auto f = pfd::save_file("Save JSON", default_name,
+                                                                {"JSON Files", "*.json", "All Files", "*.*"});
+
+                                        if (!f.result().empty())
+                                        {
+                                            std::ofstream out(f.result());
+                                            if (out.is_open())
+                                            {
+                                                out << g_state.preview.json_preview;
+                                                out.close();
+                                                g_state.tasks.status = "Saved to: " + f.result();
+                                            }
+                                        }
+                                    }
+                                    catch (...)
+                                    {
+                                    }
+                                }
+                                nk_layout_row_end(ctx);
                             }
 
+                            nk_layout_row_dynamic(ctx, content_height - 130, 1);
+                            if (nk_group_begin(ctx, "JsonPreview", NK_WINDOW_BORDER))
+                            {
+                                std::stringstream ss(g_state.preview.json_preview);
+                                std::string line;
+                                int line_count = 0;
+                                while (std::getline(ss, line))
+                                {
+                                    if (line_count > 500)
+                                    {
+                                        nk_layout_row_dynamic(ctx, 20, 1);
+                                        nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
+                                        break;
+                                    }
+
+                                    nk_layout_row_dynamic(ctx, 20, 1);
+                                    nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
+                                    line_count++;
+                                }
+                                nk_group_end(ctx);
+                            }
+                        }
+                        else if (g_state.preview.mode == PreviewMode::Text)
+                        {
+                            nk_layout_row_dynamic(ctx, 25, 1);
+                            nk_label(ctx, "Text Viewer", NK_TEXT_CENTERED);
+
+                            nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
                             nk_layout_row_push(ctx, 120);
                             if (nk_button_label(ctx, "Copy All"))
                             {
-                                SDL_SetClipboardText(preview_json_data.c_str());
+                                const std::string &data_to_copy = g_state.preview.atlas_full.empty() ? g_state.preview.atlas_preview : g_state.preview.atlas_full;
+                                SDL_SetClipboardText(data_to_copy.c_str());
                             }
                             nk_layout_row_push(ctx, 120);
                             if (nk_button_label(ctx, "Save As..."))
                             {
                                 try
                                 {
-                                    std::string default_name = selected_node ? selected_node->name : "output";
+                                    std::string default_name = g_state.browser.selected_node ? g_state.browser.selected_node->name : "output";
                                     size_t dot_pos = default_name.find_last_of('.');
                                     if (dot_pos != std::string::npos)
                                     {
                                         default_name = default_name.substr(0, dot_pos);
                                     }
-                                    default_name += ".json";
 
-                                    auto f = pfd::save_file("Save JSON", default_name,
-                                                            {"JSON Files", "*.json", "All Files", "*.*"});
+                                    std::string data_to_save = g_state.preview.atlas_full.empty() ? g_state.preview.atlas_preview : g_state.preview.atlas_full;
+                                    bool is_atlas = data_to_save.find("format: ") != std::string::npos &&
+                                                    data_to_save.find("filter: ") != std::string::npos;
+
+                                    if (is_atlas)
+                                    {
+                                        default_name += ".atlas";
+
+                                        // replace .sct with .png in the atlas content
+                                        // this so user dont have to do it manually
+                                        size_t pos = 0;
+                                        while ((pos = data_to_save.find(".sct", pos)) != std::string::npos)
+                                        {
+                                            data_to_save.replace(pos, 4, ".png");
+                                            pos += 4;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        default_name += ".txt";
+                                    }
+
+                                    auto f = pfd::save_file(is_atlas ? "Save Atlas" : "Save Text", default_name,
+                                                            is_atlas ? std::vector<std::string>{"Atlas Files", "*.atlas", "Text Files", "*.txt", "All Files", "*.*"}
+                                                                     : std::vector<std::string>{"Text Files", "*.txt", "All Files", "*.*"});
 
                                     if (!f.result().empty())
                                     {
-                                        std::ofstream out(f.result());
+                                        std::ofstream out(f.result(), std::ios::binary);
                                         if (out.is_open())
                                         {
-                                            out << preview_json_data;
+                                            out << data_to_save;
                                             out.close();
-                                            status_text = "Saved to: " + f.result();
+                                            g_state.tasks.status = "Saved to: " + f.result();
                                         }
                                     }
                                 }
@@ -3456,838 +3598,39 @@ int main(int argc, char *argv[])
                                 }
                             }
                             nk_layout_row_end(ctx);
-                        }
 
-                        nk_layout_row_dynamic(ctx, content_height - 130, 1);
-                        if (nk_group_begin(ctx, "JsonPreview", NK_WINDOW_BORDER))
-                        {
-                            std::stringstream ss(preview_json_data);
-                            std::string line;
-                            int line_count = 0;
-                            while (std::getline(ss, line))
+                            nk_layout_row_dynamic(ctx, content_height - 130, 1);
+                            if (nk_group_begin(ctx, "TextPreview", NK_WINDOW_BORDER))
                             {
-                                if (line_count > 500)
+                                std::stringstream ss(g_state.preview.atlas_preview);
+                                std::string line;
+                                int line_count = 0;
+                                while (std::getline(ss, line))
                                 {
+                                    if (line_count > 500)
+                                    {
+                                        nk_layout_row_dynamic(ctx, 20, 1);
+                                        nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
+                                        break;
+                                    }
+
+                                    if (!line.empty() && line.back() == '\r')
+                                        line.pop_back();
+
                                     nk_layout_row_dynamic(ctx, 20, 1);
-                                    nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
-                                    break;
+                                    nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
+                                    line_count++;
                                 }
-
-                                nk_layout_row_dynamic(ctx, 20, 1);
-                                nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
-                                line_count++;
+                                nk_group_end(ctx);
                             }
-                            nk_group_end(ctx);
                         }
-                    }
-                    else if (current_preview_mode == PreviewMode::Text)
-                    {
-                        nk_layout_row_dynamic(ctx, 25, 1);
-                        nk_label(ctx, "Text Viewer", NK_TEXT_CENTERED);
-
-                        nk_layout_row_begin(ctx, NK_STATIC, 30, 3);
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Copy All"))
+                        else if (!g_state.preview.error.empty())
                         {
-                            const std::string &data_to_copy = full_atlas_data.empty() ? preview_atlas_data : full_atlas_data;
-                            SDL_SetClipboardText(data_to_copy.c_str());
+                            nk_layout_row_dynamic(ctx, 30, 1);
+                            nk_label_colored(ctx, "Error:", NK_TEXT_CENTERED, nk_rgb(255, 100, 100));
+                            nk_layout_row_dynamic(ctx, 20, 1);
+                            nk_label_colored(ctx, g_state.preview.error.c_str(), NK_TEXT_CENTERED, nk_rgb(255, 255, 255));
                         }
-                        nk_layout_row_push(ctx, 120);
-                        if (nk_button_label(ctx, "Save As..."))
-                        {
-                            try
-                            {
-                                std::string default_name = selected_node ? selected_node->name : "output";
-                                size_t dot_pos = default_name.find_last_of('.');
-                                if (dot_pos != std::string::npos)
-                                {
-                                    default_name = default_name.substr(0, dot_pos);
-                                }
-
-                                std::string data_to_save = full_atlas_data.empty() ? preview_atlas_data : full_atlas_data;
-                                bool is_atlas = data_to_save.find("format: ") != std::string::npos &&
-                                                data_to_save.find("filter: ") != std::string::npos;
-
-                                if (is_atlas)
-                                {
-                                    default_name += ".atlas";
-
-                                    // replace .sct with .png in the atlas content
-                                    // this so user dont have to do it manually
-                                    size_t pos = 0;
-                                    while ((pos = data_to_save.find(".sct", pos)) != std::string::npos)
-                                    {
-                                        data_to_save.replace(pos, 4, ".png");
-                                        pos += 4;
-                                    }
-                                }
-                                else
-                                {
-                                    default_name += ".txt";
-                                }
-
-                                auto f = pfd::save_file(is_atlas ? "Save Atlas" : "Save Text", default_name,
-                                                        is_atlas ? std::vector<std::string>{"Atlas Files", "*.atlas", "Text Files", "*.txt", "All Files", "*.*"}
-                                                                 : std::vector<std::string>{"Text Files", "*.txt", "All Files", "*.*"});
-
-                                if (!f.result().empty())
-                                {
-                                    std::ofstream out(f.result(), std::ios::binary);
-                                    if (out.is_open())
-                                    {
-                                        out << data_to_save;
-                                        out.close();
-                                        status_text = "Saved to: " + f.result();
-                                    }
-                                }
-                            }
-                            catch (...)
-                            {
-                            }
-                        }
-                        nk_layout_row_end(ctx);
-
-                        nk_layout_row_dynamic(ctx, content_height - 130, 1);
-                        if (nk_group_begin(ctx, "TextPreview", NK_WINDOW_BORDER))
-                        {
-                            std::stringstream ss(preview_atlas_data);
-                            std::string line;
-                            int line_count = 0;
-                            while (std::getline(ss, line))
-                            {
-                                if (line_count > 500)
-                                {
-                                    nk_layout_row_dynamic(ctx, 20, 1);
-                                    nk_label_colored(ctx, "... (preview limit reached)", NK_TEXT_LEFT, nk_rgb(255, 100, 100));
-                                    break;
-                                }
-
-                                if (!line.empty() && line.back() == '\r')
-                                    line.pop_back();
-
-                                nk_layout_row_dynamic(ctx, 20, 1);
-                                nk_label_colored(ctx, line.c_str(), NK_TEXT_LEFT, nk_rgb(220, 220, 220));
-                                line_count++;
-                            }
-                            nk_group_end(ctx);
-                        }
-                    }
-                    else if (!preview_error.empty())
-                    {
-                        nk_layout_row_dynamic(ctx, 30, 1);
-                        nk_label_colored(ctx, "Error:", NK_TEXT_CENTERED, nk_rgb(255, 100, 100));
-                        nk_layout_row_dynamic(ctx, 20, 1);
-                        nk_label_colored(ctx, preview_error.c_str(), NK_TEXT_CENTERED, nk_rgb(255, 255, 255));
-                    }
-
-                    nk_group_end(ctx);
-                }
-            }
-
-            nk_layout_row_end(ctx);
-          } else {
-            // ====== SPINE VIEWER INLINE ======
-            // Update animation
-            if (active_spine_viewer && active_spine_viewer->isLoaded()) {
-                float dt = 0;
-                if (spine_playing) {
-                    Uint64 now = SDL_GetPerformanceCounter();
-                    if (spine_last_tick > 0) {
-                        dt = (float)(now - spine_last_tick) / (float)SDL_GetPerformanceFrequency();
-                        dt *= spine_speed;
-                    }
-                    spine_last_tick = now;
-                }
-                active_spine_viewer->update(dt);
-            }
-
-            if (spine_building) {
-                nk_layout_row_dynamic(ctx, 30, 1);
-                nk_label(ctx, "Building Spine dictionary...", NK_TEXT_CENTERED);
-            } else if (spine_dictionary.IsBuilt()) {
-                const auto& spine_entries_inline = spine_dictionary.GetEntries();
-                const auto& root_cat = spine_dictionary.GetRootCategory();
-
-                // Search bar
-                nk_layout_row_begin(ctx, NK_STATIC, 28, 3);
-                nk_layout_row_push(ctx, 60);
-                nk_label(ctx, "Search:", NK_TEXT_LEFT);
-                nk_layout_row_push(ctx, 250);
-                nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, spine_search_buffer, sizeof(spine_search_buffer), nk_filter_default);
-                spine_search_query = spine_search_buffer;
-                nk_layout_row_push(ctx, 200);
-                std::string sstats = std::to_string(spine_entries_inline.size()) + " skeletons";
-                nk_label_colored(ctx, sstats.c_str(), NK_TEXT_LEFT, nk_rgb(150, 200, 255));
-                nk_layout_row_end(ctx);
-
-                // Layout: list | viewport | editor
-                float sw = (float)window_width;
-                float sh = content_height - 30.0f;
-                float iListW = sw * 0.22f;
-                float iEditorW = spine_edit_mode ? sw * 0.30f : 0;
-                float iViewerW = sw - iListW - iEditorW - 50.0f;
-
-                nk_layout_row_begin(ctx, NK_STATIC, sh, spine_edit_mode ? 3 : 2);
-
-                // Skeleton list
-                spine_visible_indices.clear();
-                nk_layout_row_push(ctx, iListW);
-                if (nk_group_begin(ctx, "SpineListInline", NK_WINDOW_BORDER)) {
-                    draw_spine_category(ctx, root_cat, spine_entries_inline, 0);
-                    nk_group_end(ctx);
-                }
-
-                // Viewer panel
-                nk_layout_row_push(ctx, iViewerW);
-                if (nk_group_begin(ctx, "SpineViewInline", NK_WINDOW_BORDER)) {
-                    if (active_spine_viewer && active_spine_viewer->isLoaded()) {
-                        // === Controls row 1: Anim, Skin, Play/Pause ===
-                        nk_layout_row_begin(ctx, NK_STATIC, 28, 8);
-
-                        nk_layout_row_push(ctx, 50);
-                        nk_label(ctx, "Anim:", NK_TEXT_LEFT);
-                        nk_layout_row_push(ctx, 160);
-                        auto anim_names = active_spine_viewer->getAnimationNames();
-                        if (!anim_names.empty()) {
-                            spine_anim_selected = active_spine_viewer->getCurrentAnimIndex();
-                            if (spine_anim_selected >= (int)anim_names.size()) spine_anim_selected = 0;
-                            if (nk_combo_begin_label(ctx, anim_names[spine_anim_selected].c_str(), nk_vec2(200, 300))) {
-                                nk_layout_row_dynamic(ctx, 22, 1);
-                                for (int a = 0; a < (int)anim_names.size(); a++) {
-                                    if (nk_combo_item_label(ctx, anim_names[a].c_str(), NK_TEXT_LEFT)) {
-                                        if (a != spine_anim_selected) {
-                                            spine_anim_selected = a;
-                                            active_spine_viewer->setAnimation(anim_names[a], true);
-                                        }
-                                    }
-                                }
-                                nk_combo_end(ctx);
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 45);
-                        nk_label(ctx, "Skin:", NK_TEXT_LEFT);
-                        nk_layout_row_push(ctx, 120);
-                        auto skin_names = active_spine_viewer->getSkinNames();
-                        if (!skin_names.empty()) {
-                            if (spine_skin_selected >= (int)skin_names.size()) spine_skin_selected = 0;
-                            if (nk_combo_begin_label(ctx, skin_names[spine_skin_selected].c_str(), nk_vec2(160, 300))) {
-                                nk_layout_row_dynamic(ctx, 22, 1);
-                                for (int s = 0; s < (int)skin_names.size(); s++) {
-                                    if (nk_combo_item_label(ctx, skin_names[s].c_str(), NK_TEXT_LEFT)) {
-                                        if (s != spine_skin_selected) {
-                                            spine_skin_selected = s;
-                                            active_spine_viewer->setSkin(skin_names[s]);
-                                        }
-                                    }
-                                }
-                                nk_combo_end(ctx);
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 60);
-                        if (nk_button_label(ctx, spine_playing ? "Pause" : "Play")) {
-                            spine_playing = !spine_playing;
-                            active_spine_viewer->setPlaying(spine_playing);
-                            if (spine_playing) spine_last_tick = SDL_GetPerformanceCounter();
-                        }
-
-                        nk_layout_row_end(ctx);
-
-                        // === Controls row 2: Speed, Zoom, Flip, Edit, Reset, Export ===
-                        nk_layout_row_begin(ctx, NK_STATIC, 28, 13);
-
-                        nk_layout_row_push(ctx, 50);
-                        nk_label(ctx, "Speed:", NK_TEXT_LEFT);
-                        nk_layout_row_push(ctx, 120);
-                        nk_slider_float(ctx, 0.1f, &spine_speed, 3.0f, 0.1f);
-                        nk_layout_row_push(ctx, 40);
-                        char speed_label[16];
-                        snprintf(speed_label, sizeof(speed_label), "%.1fx", spine_speed);
-                        nk_label(ctx, speed_label, NK_TEXT_LEFT);
-
-                        nk_layout_row_push(ctx, 45);
-                        nk_label(ctx, "Zoom:", NK_TEXT_LEFT);
-                        nk_layout_row_push(ctx, 100);
-                        spine_zoom = active_spine_viewer->getZoom();
-                        nk_slider_float(ctx, 0.1f, &spine_zoom, 5.0f, 0.1f);
-                        nk_layout_row_push(ctx, 40);
-                        char zoom_label[16];
-                        snprintf(zoom_label, sizeof(zoom_label), "%.1fx", spine_zoom);
-                        nk_label(ctx, zoom_label, NK_TEXT_LEFT);
-                        active_spine_viewer->setZoom(spine_zoom);
-
-                        nk_layout_row_push(ctx, 60);
-                        {
-                            struct nk_style_button flip_style = ctx->style.button;
-                            flip_style.rounding = 3.0f;
-                            if (spine_flip_x) {
-                                flip_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
-                                flip_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
-                            } else {
-                                flip_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
-                                flip_style.hover = nk_style_item_color(nk_rgb(75, 75, 80));
-                            }
-                            flip_style.text_normal = nk_rgb(220, 220, 220);
-                            flip_style.text_hover = nk_rgb(255, 255, 255);
-                            if (nk_button_label_styled(ctx, &flip_style, "Flip X")) {
-                                spine_flip_x = !spine_flip_x;
-                                active_spine_viewer->setFlipX(spine_flip_x);
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 60);
-                        {
-                            struct nk_style_button flip_style = ctx->style.button;
-                            flip_style.rounding = 3.0f;
-                            if (spine_flip_y) {
-                                flip_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
-                                flip_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
-                            } else {
-                                flip_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
-                                flip_style.hover = nk_style_item_color(nk_rgb(75, 75, 80));
-                            }
-                            flip_style.text_normal = nk_rgb(220, 220, 220);
-                            flip_style.text_hover = nk_rgb(255, 255, 255);
-                            if (nk_button_label_styled(ctx, &flip_style, "Flip Y")) {
-                                spine_flip_y = !spine_flip_y;
-                                active_spine_viewer->setFlipY(spine_flip_y);
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 45);
-                        {
-                            struct nk_style_button edit_style = ctx->style.button;
-                            edit_style.rounding = 3.0f;
-                            if (spine_edit_mode) {
-                                edit_style.normal = nk_style_item_color(nk_rgb(120, 80, 40));
-                                edit_style.hover = nk_style_item_color(nk_rgb(140, 95, 50));
-                            } else {
-                                edit_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
-                                edit_style.hover = nk_style_item_color(nk_rgb(75, 75, 80));
-                            }
-                            edit_style.text_normal = nk_rgb(220, 220, 220);
-                            edit_style.text_hover = nk_rgb(255, 255, 255);
-                            if (nk_button_label_styled(ctx, &edit_style, "Edit")) {
-                                spine_edit_mode = !spine_edit_mode;
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 55);
-                        if (nk_button_label(ctx, "Reset")) {
-                            spine_zoom = 1.0f;
-                            active_spine_viewer->resetView();
-                        }
-
-                        nk_layout_row_push(ctx, 100);
-                        if (spine_selected_index >= 0 && spine_selected_index < (int)spine_entries_inline.size()) {
-                            if (nk_button_label(ctx, "Export All")) {
-                                const auto& entry = spine_entries_inline[spine_selected_index];
-                                try {
-                                    auto d = pfd::select_folder("Select destination folder", ".");
-                                    if (!d.result().empty()) {
-                                        std::string dest = d.result();
-                                        int exported = 0;
-                                        {
-                                            std::vector<uint8_t> data = data_pack->GetFileData(*entry.scsp_node);
-                                            std::string json_str = SCSPParser::ConvertSCSPToJson(data);
-                                            if (!json_str.empty()) {
-                                                try { json parsed = json::parse(json_str); json_str = parsed.dump(2); } catch (...) {}
-                                                std::ofstream out(dest + "/" + entry.display_name + ".json");
-                                                out << json_str; exported++;
-                                            }
-                                        }
-                                        if (entry.atlas_node) {
-                                            std::vector<uint8_t> data = data_pack->GetFileData(*entry.atlas_node);
-                                            std::string atlas_str(data.begin(), data.end());
-                                            size_t p = 0;
-                                            while ((p = atlas_str.find(".sct", p)) != std::string::npos) { atlas_str.replace(p, 4, ".png"); p += 4; }
-                                            std::ofstream out(dest + "/" + entry.atlas_node->name, std::ios::binary);
-                                            out << atlas_str; exported++;
-                                        }
-                                        spine_dictionary.EnsureDetailsLoaded(*data_pack, entry);
-                                        for (const auto* img : entry.image_nodes) {
-                                            const auto& fi = std::get<Core::FileInfo>(img->data);
-                                            std::vector<uint8_t> data = data_pack->GetFileData(*img);
-                                            std::string out_name = img->name;
-                                            std::string el = fi.format;
-                                            std::transform(el.begin(), el.end(), el.begin(), ::tolower);
-                                            if (el == ".sct" || el == ".sct2") {
-                                                std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(data, false);
-                                                if (!png_data.empty()) {
-                                                    size_t dp = out_name.find_last_of('.');
-                                                    if (dp != std::string::npos) out_name = out_name.substr(0, dp);
-                                                    out_name += ".png";
-                                                    std::ofstream out(dest + "/" + out_name, std::ios::binary);
-                                                    out.write((const char*)png_data.data(), png_data.size()); exported++;
-                                                }
-                                            } else {
-                                                std::ofstream out(dest + "/" + out_name, std::ios::binary);
-                                                out.write((const char*)data.data(), data.size()); exported++;
-                                            }
-                                        }
-                                        status_text = "Exported " + std::to_string(exported) + " files for '" + entry.display_name + "'";
-                                    }
-                                } catch (const std::exception& e) { status_text = "Export error: " + std::string(e.what()); }
-                            }
-                        }
-
-                        nk_layout_row_end(ctx);
-
-                        // === Controls row 3: Autoplay, Next, PMA ===
-                        static bool spine_autoplay = false;
-                        static bool spine_pma_blend = true;
-                        static bool spine_pma_tex = true;
-                        static int spine_bg_preset = 0; // 0=none, 1=dark, 2=mid, 3=white
-                        nk_layout_row_begin(ctx, NK_STATIC, 24, 7);
-
-                        nk_layout_row_push(ctx, 80);
-                        {
-                            struct nk_style_button ab = ctx->style.button;
-                            ab.rounding = 3.0f;
-                            ab.normal = nk_style_item_color(spine_autoplay ? nk_rgb(56, 120, 74) : nk_rgb(60, 60, 65));
-                            ab.hover = nk_style_item_color(spine_autoplay ? nk_rgb(66, 138, 86) : nk_rgb(75, 75, 80));
-                            ab.text_normal = nk_rgb(220, 220, 220);
-                            if (nk_button_label_styled(ctx, &ab, spine_autoplay ? "Auto: ON" : "Auto: OFF")) {
-                                spine_autoplay = !spine_autoplay;
-                                active_spine_viewer->setAutoplayNext(spine_autoplay);
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 50);
-                        if (nk_button_label(ctx, "Next")) {
-                            active_spine_viewer->nextAnimation();
-                            spine_anim_selected = active_spine_viewer->getCurrentAnimIndex();
-                        }
-
-                        nk_layout_row_push(ctx, 20);
-                        nk_spacing(ctx, 1);
-
-                        nk_layout_row_push(ctx, 80);
-                        {
-                            struct nk_style_button pb = ctx->style.button;
-                            pb.rounding = 3.0f;
-                            pb.normal = nk_style_item_color(spine_pma_blend ? nk_rgb(70, 90, 120) : nk_rgb(60, 60, 65));
-                            pb.hover = nk_style_item_color(nk_rgb(80, 100, 130));
-                            pb.text_normal = nk_rgb(200, 200, 200);
-                            if (nk_button_label_styled(ctx, &pb, spine_pma_blend ? "PMA: ON" : "PMA: OFF")) {
-                                spine_pma_blend = !spine_pma_blend;
-                                // Source textures from ASTC are already premultiplied —
-                                // never re-premultiply, just toggle the blend mode
-                                active_spine_viewer->setUsePMA(spine_pma_blend);
-                                active_spine_viewer->setPremultiplyTextures(false);
-                                if (spine_selected_index >= 0 && spine_selected_index < (int)spine_entries_inline.size()) {
-                                    active_spine_viewer->loadSkeleton(spine_dictionary, *data_pack, spine_entries_inline[spine_selected_index]);
-                                }
-                            }
-                        }
-
-                        nk_layout_row_push(ctx, 10);
-                        nk_spacing(ctx, 1);
-
-                        // Viewport background preset
-                        nk_layout_row_push(ctx, 80);
-                        {
-                            const char* bg_labels[] = {"BG: None", "BG: Dark", "BG: Gray", "BG: White"};
-                            const float bg_colors[][3] = {
-                                {0, 0, 0}, {0.12f, 0.12f, 0.14f},
-                                {0.35f, 0.35f, 0.38f}, {1.0f, 1.0f, 1.0f}
-                            };
-                            struct nk_style_button bb = ctx->style.button;
-                            bb.rounding = 3.0f;
-                            bb.normal = nk_style_item_color(nk_rgb(60, 60, 65));
-                            bb.hover = nk_style_item_color(nk_rgb(75, 75, 80));
-                            bb.text_normal = nk_rgb(200, 200, 200);
-                            if (nk_button_label_styled(ctx, &bb, bg_labels[spine_bg_preset])) {
-                                spine_bg_preset = (spine_bg_preset + 1) % 4;
-                                active_spine_viewer->setBgColor(
-                                    bg_colors[spine_bg_preset][0],
-                                    bg_colors[spine_bg_preset][1],
-                                    bg_colors[spine_bg_preset][2]);
-                            }
-                        }
-
-                        nk_layout_row_end(ctx);
-
-                        // === Viewport ===
-                        float vpH = sh - 120.0f;
-                        if (vpH < 100) vpH = 100;
-                        nk_layout_row_dynamic(ctx, vpH, 1);
-                        struct nk_rect vb = nk_widget_bounds(ctx);
-                        int vw = (int)vb.w, vh = (int)vb.h;
-
-                        // Mouse interaction (skip if a combo/popup is active)
-                        {
-                            nk_input* inp = &ctx->input;
-                            bool popup_active = (ctx->current && ctx->current->popup.win);
-                            if (!popup_active && nk_input_is_mouse_hovering_rect(inp, vb)) {
-                                float scr = inp->mouse.scroll_delta.y;
-                                float mdx = inp->mouse.delta.x, mdy = inp->mouse.delta.y;
-                                Uint32 km = SDL_GetModState();
-
-                                if (scr != 0 && !(km & KMOD_CTRL)) {
-                                    active_spine_viewer->zoomBy(scr > 0 ? 1.15f : 1.0f/1.15f);
-                                    spine_zoom = active_spine_viewer->getZoom();
-                                }
-                                if (nk_input_is_mouse_down(inp, NK_BUTTON_MIDDLE) ||
-                                    nk_input_is_mouse_down(inp, NK_BUTTON_RIGHT) ||
-                                    (nk_input_is_mouse_down(inp, NK_BUTTON_LEFT) && (!spine_edit_mode || (km & KMOD_SHIFT)))) {
-                                    if (mdx != 0 || mdy != 0) {
-                                        float s = active_spine_viewer->getZoom() > 0 ? (float)vw / active_spine_viewer->getZoom() / vw : 1;
-                                        active_spine_viewer->pan(mdx * s, -mdy * s);
-                                    }
-                                }
-                                if (spine_edit_mode && !spine_selected_bone.empty() && scr != 0 && (km & KMOD_CTRL)) {
-                                    auto bl = active_spine_viewer->getBoneList();
-                                    for (auto& b : bl) { if (b.name == spine_selected_bone) {
-                                        BoneOverride o; o.x=b.x; o.y=b.y; o.rotation=b.rotation;
-                                        o.scaleX=b.scaleX+scr*0.05f; o.scaleY=b.scaleY+scr*0.05f;
-                                        o.shearX=b.shearX; o.shearY=b.shearY;
-                                        active_spine_viewer->setBoneOverride(b.name, o); break;
-                                    }}
-                                }
-                                if (spine_edit_mode) {
-                                    static SpineViewer::GizmoHandle ag = SpineViewer::GizmoHandle::None;
-                                    float lx = inp->mouse.pos.x - vb.x, ly = inp->mouse.pos.y - vb.y;
-                                    if (nk_input_is_mouse_pressed(inp, NK_BUTTON_LEFT) && !(km & KMOD_SHIFT)) {
-                                        ag = active_spine_viewer->hitTestGizmo(lx, ly, vw, vh);
-                                        if (ag == SpineViewer::GizmoHandle::None) {
-                                            spine_selected_bone = active_spine_viewer->hitTestBone(lx, ly, vw, vh);
-                                            if (!spine_selected_bone.empty()) {
-                                                ag = SpineViewer::GizmoHandle::Move;
-                                                spine_scroll_to_bone = true;
-                                            }
-                                        }
-                                    }
-                                    if (!nk_input_is_mouse_down(inp, NK_BUTTON_LEFT)) ag = SpineViewer::GizmoHandle::None;
-                                    if (ag != SpineViewer::GizmoHandle::None && !spine_selected_bone.empty()
-                                        && nk_input_is_mouse_down(inp, NK_BUTTON_LEFT) && (mdx!=0||mdy!=0)) {
-                                        float s = active_spine_viewer->getZoom()>0?(float)vw/active_spine_viewer->getZoom()/vw:1;
-                                        auto bl = active_spine_viewer->getBoneList();
-                                        for (auto& b : bl) { if (b.name != spine_selected_bone) continue;
-                                            BoneOverride o; o.x=b.x; o.y=b.y; o.rotation=b.rotation;
-                                            o.scaleX=b.scaleX; o.scaleY=b.scaleY; o.shearX=b.shearX; o.shearY=b.shearY;
-                                            if (ag==SpineViewer::GizmoHandle::Move) { o.x+=mdx*s; o.y-=mdy*s; }
-                                            else if (ag==SpineViewer::GizmoHandle::Rotate) { o.rotation+=mdx*0.5f; }
-                                            else { o.scaleX+=mdx*0.005f; o.scaleY-=mdy*0.005f; }
-                                            active_spine_viewer->setBoneOverride(b.name, o); break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (vw > 0 && vh > 0) {
-                            active_spine_viewer->render(vw, vh);
-                            GLuint ft = active_spine_viewer->getFBOTexture();
-                            if (ft) {
-                                struct nk_image fimg = nk_image_id((int)ft);
-                                nk_draw_image(nk_window_get_canvas(ctx), vb, &fimg, nk_rgb(255,255,255));
-                            }
-                        }
-                    } else if (active_spine_viewer && !active_spine_viewer->getError().empty()) {
-                        nk_layout_row_dynamic(ctx, 30, 1);
-                        nk_label_colored(ctx, "Error:", NK_TEXT_CENTERED, nk_rgb(255, 100, 100));
-                        nk_layout_row_dynamic(ctx, 20, 1);
-                        nk_label(ctx, active_spine_viewer->getError().c_str(), NK_TEXT_CENTERED);
-                    } else {
-                        nk_layout_row_dynamic(ctx, 30, 1);
-                        nk_label(ctx, "Select a skeleton from the list", NK_TEXT_CENTERED);
-                    }
-                    nk_group_end(ctx);
-                }
-
-                // Bone editor panel (third column, only when editing)
-                if (spine_edit_mode && active_spine_viewer && active_spine_viewer->isLoaded()) {
-                    nk_layout_row_push(ctx, iEditorW);
-                    if (nk_group_begin(ctx, "BoneEditor", NK_WINDOW_BORDER)) {
-                        nk_layout_row_dynamic(ctx, 24, 3);
-                        if (nk_button_label(ctx, "Reset All")) {
-                            active_spine_viewer->resetBoneEdits();
-                            spine_selected_bone = "";
-                        }
-
-                        static bool spine_export_pending = false;
-                        if (nk_button_label(ctx, "Export Modified")) {
-                            spine_export_pending = true;
-                        }
-
-                        auto texList = active_spine_viewer->getTextureList();
-                        if (texList.empty()) {
-                            nk_spacing(ctx, 1);
-                        }
-
-                        if (spine_export_pending) {
-                            spine_export_pending = false;
-                            try {
-                                auto d = pfd::select_folder("Select destination folder", ".");
-                                if (!d.result().empty() && spine_selected_index >= 0) {
-                                    std::string dest = d.result();
-                                    const auto& entry = spine_entries_inline[spine_selected_index];
-                                    int exported = 0;
-                                    std::string modJson = active_spine_viewer->getModifiedSkeletonJson();
-                                    if (!modJson.empty()) {
-                                        std::ofstream out(dest + "/" + entry.display_name + "_modified.json");
-                                        out << modJson; exported++;
-                                    }
-                                    if (entry.atlas_node) {
-                                        std::vector<uint8_t> ad = data_pack->GetFileData(*entry.atlas_node);
-                                        std::string as(ad.begin(), ad.end());
-                                        size_t p = 0;
-                                        while ((p = as.find(".sct", p)) != std::string::npos) { as.replace(p, 4, ".png"); p += 4; }
-                                        std::ofstream out(dest + "/" + entry.atlas_node->name, std::ios::binary);
-                                        out << as; exported++;
-                                    }
-                                    for (const auto* img : entry.image_nodes) {
-                                        const auto& fi = std::get<Core::FileInfo>(img->data);
-                                        std::vector<uint8_t> fd = data_pack->GetFileData(*img);
-                                        std::string on = img->name;
-                                        std::string el = fi.format;
-                                        std::transform(el.begin(), el.end(), el.begin(), ::tolower);
-                                        if (el == ".sct" || el == ".sct2") {
-                                            auto png = SCTParser::ConvertToPNG(fd, false);
-                                            if (!png.empty()) {
-                                                size_t dp = on.find_last_of('.'); if (dp != std::string::npos) on = on.substr(0, dp);
-                                                on += ".png";
-                                                std::ofstream out(dest + "/" + on, std::ios::binary);
-                                                out.write((const char*)png.data(), png.size()); exported++;
-                                            }
-                                        } else {
-                                            std::ofstream out(dest + "/" + on, std::ios::binary);
-                                            out.write((const char*)fd.data(), fd.size()); exported++;
-                                        }
-                                    }
-                                    status_text = "Exported " + std::to_string(exported) + " modified files";
-                                }
-                            } catch (...) {}
-                        }
-
-                        // Bone search — ABOVE the scrollable list so it stays fixed
-                        static char bone_search_buf[128] = {0};
-                        nk_layout_row_begin(ctx, NK_STATIC, 20, 2);
-                        nk_layout_row_push(ctx, 50);
-                        nk_label(ctx, "Filter:", NK_TEXT_LEFT);
-                        nk_layout_row_push(ctx, iEditorW - 70);
-                        nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, bone_search_buf, sizeof(bone_search_buf), nk_filter_default);
-                        nk_layout_row_end(ctx);
-                        std::string bone_query = bone_search_buf;
-                        std::transform(bone_query.begin(), bone_query.end(), bone_query.begin(), ::tolower);
-
-                        nk_layout_row_dynamic(ctx, sh - 105, 1);
-                        nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(2, 0));
-                        nk_style_push_vec2(ctx, &ctx->style.window.group_padding, nk_vec2(2, 2));
-                        if (nk_group_begin(ctx, "BoneList", NK_WINDOW_BORDER)) {
-                            auto bones = active_spine_viewer->getBoneList();
-                            float scroll_target_y = -1;
-                            static bool spine_bone_just_reset = false;
-
-                            // Build parent->has_children lookup
-                            std::unordered_set<std::string> has_children;
-                            for (auto& b : bones) {
-                                if (!b.parentName.empty()) has_children.insert(b.parentName);
-                            }
-
-                            for (size_t bi_idx = 0; bi_idx < bones.size(); bi_idx++) {
-                                auto& bi = bones[bi_idx];
-
-                                // Filter by search
-                                if (!bone_query.empty()) {
-                                    std::string lower_name = bi.name;
-                                    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-                                    if (lower_name.find(bone_query) == std::string::npos) continue;
-                                }
-
-                                // Skip if an ancestor is collapsed in the list
-                                if (bone_query.empty()) {
-                                    bool ancestor_collapsed = false;
-                                    // Walk up parents using the bone list data
-                                    std::string check = bi.parentName;
-                                    int safety = 0;
-                                    while (!check.empty() && safety++ < 20) {
-                                        if (spine_collapsed_bones.count(check)) { ancestor_collapsed = true; break; }
-                                        // Find parent's parent
-                                        bool found = false;
-                                        for (auto& pb : bones) {
-                                            if (pb.name == check) { check = pb.parentName; found = true; break; }
-                                        }
-                                        if (!found) break;
-                                    }
-                                    if (ancestor_collapsed) continue;
-                                }
-
-                                bool is_sel = (bi.name == spine_selected_bone);
-                                bool is_parent = has_children.count(bi.name) > 0;
-                                bool is_collapsed = spine_collapsed_bones.count(bi.name) > 0;
-
-                                // Bone row: indent spacer + name + H + R
-                                float indent_px = bi.depth * 10.0f;
-                                if (indent_px > 0) {
-                                    int cols = 4;
-                                    nk_layout_row_begin(ctx, NK_STATIC, 16, cols);
-                                    nk_layout_row_push(ctx, indent_px);
-                                    // Draw tree line
-                                    struct nk_rect sp_bounds = nk_widget_bounds(ctx);
-                                    struct nk_command_buffer* canvas = nk_window_get_canvas(ctx);
-                                    float line_x = sp_bounds.x + indent_px - 6;
-                                    nk_stroke_line(canvas, line_x, sp_bounds.y, line_x, sp_bounds.y + sp_bounds.h, 1.0f, nk_rgb(60, 65, 75));
-                                    nk_stroke_line(canvas, line_x, sp_bounds.y + sp_bounds.h * 0.5f, sp_bounds.x + indent_px, sp_bounds.y + sp_bounds.h * 0.5f, 1.0f, nk_rgb(60, 65, 75));
-                                    nk_spacing(ctx, 1);
-                                    float remaining = iEditorW - indent_px - 60;
-                                    nk_layout_row_push(ctx, remaining > 40 ? remaining : 40);
-                                } else {
-                                    nk_layout_row_begin(ctx, NK_STATIC, 16, 3);
-                                    float remaining = iEditorW - 60;
-                                    nk_layout_row_push(ctx, remaining > 40 ? remaining : 40);
-                                }
-
-                                // Grab bounds for auto-scroll
-                                if (is_sel && spine_scroll_to_bone) {
-                                    struct nk_rect wb = nk_widget_bounds(ctx);
-                                    scroll_target_y = wb.y;
-                                }
-
-                                struct nk_style_button bone_btn = ctx->style.button;
-                                bone_btn.text_alignment = NK_TEXT_LEFT;
-                                bone_btn.padding = nk_vec2(3, 0);
-                                bone_btn.rounding = 1.0f;
-                                bone_btn.border = 0;
-                                bone_btn.normal = nk_style_item_color(is_sel ? nk_rgb(50, 70, 110) : nk_rgb(35, 35, 40));
-                                bone_btn.hover = nk_style_item_color(nk_rgb(55, 65, 80));
-                                bone_btn.active = bone_btn.hover;
-                                bone_btn.text_normal = bi.hidden ? nk_rgb(100, 100, 100)
-                                    : bi.hasOverride ? nk_rgb(255, 200, 80)
-                                    : is_sel ? nk_rgb(100, 200, 255) : nk_rgb(180, 180, 180);
-                                bone_btn.text_hover = nk_rgb(255, 255, 255);
-                                std::string bone_label = bi.name;
-                                if (is_parent) bone_label = (is_collapsed ? "+ " : "- ") + bone_label;
-                                if (nk_button_label_styled(ctx, &bone_btn, bone_label.c_str())) {
-                                    if (is_parent && bi.name == spine_selected_bone) {
-                                        // Second click on same parent toggles collapse
-                                        if (is_collapsed) spine_collapsed_bones.erase(bi.name);
-                                        else spine_collapsed_bones.insert(bi.name);
-                                    }
-                                    spine_selected_bone = bi.name;
-                                    active_spine_viewer->selectedBoneIndex = (int)bi_idx;
-                                    spine_bone_just_reset = false;
-                                }
-
-                                nk_layout_row_push(ctx, 24);
-                                {
-                                    struct nk_style_button hb = ctx->style.button;
-                                    hb.rounding = 1.0f; hb.border = 0; hb.padding = nk_vec2(0, 0);
-                                    hb.normal = nk_style_item_color(bi.hidden ? nk_rgb(120, 50, 50) : nk_rgb(45, 45, 50));
-                                    hb.hover = nk_style_item_color(nk_rgb(80, 60, 60));
-                                    hb.text_normal = nk_rgb(200, 200, 200);
-                                    if (nk_button_label_styled(ctx, &hb, bi.hidden ? "H" : "V")) {
-                                        active_spine_viewer->toggleBoneHidden(bi.name);
-                                    }
-                                }
-
-                                nk_layout_row_push(ctx, 24);
-                                {
-                                    struct nk_style_button rb = ctx->style.button;
-                                    rb.padding = nk_vec2(0, 0); rb.border = 0; rb.rounding = 1.0f;
-                                    if (nk_button_label_styled(ctx, &rb, "R")) {
-                                        active_spine_viewer->resetBone(bi.name);
-                                        spine_bone_just_reset = true;
-                                    }
-                                }
-                                nk_layout_row_end(ctx);
-
-                                if (is_sel) {
-                                    // Auto-create override if not editing (skip if just reset)
-                                    if (!bi.hasOverride && !spine_bone_just_reset) {
-                                        BoneOverride ovr;
-                                        ovr.x = bi.setupX; ovr.y = bi.setupY; ovr.rotation = bi.setupRot;
-                                        ovr.scaleX = bi.setupSX; ovr.scaleY = bi.setupSY;
-                                        ovr.shearX = bi.setupShX; ovr.shearY = bi.setupShY;
-                                        active_spine_viewer->setBoneOverride(bi.name, ovr);
-                                    }
-                                    if (bi.hasOverride) spine_bone_just_reset = false;
-
-                                    const char* labels[] = {"X", "Y", "Rot", "SclX", "SclY", "ShrX", "ShrY"};
-                                    float anim[7] = { bi.animX, bi.animY, bi.animRot, bi.animSX, bi.animSY, bi.animShX, bi.animShY };
-                                    float setup[7] = { bi.setupX, bi.setupY, bi.setupRot, bi.setupSX, bi.setupSY, bi.setupShX, bi.setupShY };
-
-                                    static bool spine_link_scale = true;
-                                    nk_layout_row_dynamic(ctx, 16, 2);
-                                    nk_label_colored(ctx, "Editing:", NK_TEXT_LEFT, nk_rgb(255, 200, 80));
-                                    {
-                                        struct nk_style_button lb = ctx->style.button;
-                                        lb.rounding = 1.0f; lb.padding = nk_vec2(2, 0); lb.border = 0;
-                                        lb.normal = nk_style_item_color(spine_link_scale ? nk_rgb(56, 120, 74) : nk_rgb(60, 60, 65));
-                                        lb.hover = nk_style_item_color(spine_link_scale ? nk_rgb(66, 138, 86) : nk_rgb(75, 75, 80));
-                                        lb.text_normal = nk_rgb(200, 200, 200);
-                                        if (nk_button_label_styled(ctx, &lb, spine_link_scale ? "Scale: Linked" : "Scale: Free")) {
-                                            spine_link_scale = !spine_link_scale;
-                                        }
-                                    }
-
-                                    float vals[7] = { bi.x, bi.y, bi.rotation, bi.scaleX, bi.scaleY, bi.shearX, bi.shearY };
-                                    float oldSclX = vals[3], oldSclY = vals[4];
-                                    float steps[7] = { 1.0f, 1.0f, 1.0f, 0.05f, 0.05f, 0.5f, 0.5f };
-                                    float pxStep[7] = { 0.5f, 0.5f, 0.5f, 0.01f, 0.01f, 0.1f, 0.1f };
-                                    for (int f = 0; f < 7; f++) {
-                                        float range = fmaxf(fmaxf(fabsf(vals[f]), fabsf(setup[f])) * 3.0f, 10.0f);
-                                        nk_layout_row_dynamic(ctx, 18, 1);
-                                        vals[f] = nk_propertyf(ctx, labels[f], -range, vals[f], range, steps[f], pxStep[f]);
-                                    }
-
-                                    if (spine_link_scale) {
-                                        float dsx = vals[3] - oldSclX, dsy = vals[4] - oldSclY;
-                                        if (dsx != 0 && dsy == 0) vals[4] += dsx;
-                                        if (dsy != 0 && dsx == 0) vals[3] += dsy;
-                                    }
-
-                                    BoneOverride ovr;
-                                    ovr.x = vals[0]; ovr.y = vals[1]; ovr.rotation = vals[2];
-                                    ovr.scaleX = vals[3]; ovr.scaleY = vals[4];
-                                    ovr.shearX = vals[5]; ovr.shearY = vals[6];
-                                    active_spine_viewer->setBoneOverride(bi.name, ovr);
-
-                                    // Animated values
-                                    nk_layout_row_dynamic(ctx, 13, 1);
-                                    nk_label_colored(ctx, "Animated:", NK_TEXT_LEFT, nk_rgb(100, 180, 255));
-                                    nk_layout_row_dynamic(ctx, 13, 4);
-                                    for (int f = 0; f < 7; f++) {
-                                        char abuf[24];
-                                        snprintf(abuf, sizeof(abuf), "%s:%.1f", labels[f], anim[f]);
-                                        nk_label_colored(ctx, abuf, NK_TEXT_LEFT, nk_rgb(80, 150, 220));
-                                        if (f == 3) { nk_layout_row_dynamic(ctx, 13, 4); }
-                                    }
-
-                                    // Setup pose
-                                    nk_layout_row_dynamic(ctx, 13, 1);
-                                    nk_label_colored(ctx, "Setup:", NK_TEXT_LEFT, nk_rgb(100, 200, 100));
-                                    nk_layout_row_dynamic(ctx, 13, 4);
-                                    for (int f = 0; f < 7; f++) {
-                                        char sbuf[24];
-                                        snprintf(sbuf, sizeof(sbuf), "%s:%.1f", labels[f], setup[f]);
-                                        nk_label_colored(ctx, sbuf, NK_TEXT_LEFT, nk_rgb(80, 170, 80));
-                                        if (f == 3) { nk_layout_row_dynamic(ctx, 13, 4); }
-                                    }
-
-                                    nk_layout_row_dynamic(ctx, 2, 1);
-                                    nk_spacing(ctx, 1);
-                                }
-                            }
-
-                            // Auto-scroll
-                            if (spine_scroll_to_bone && scroll_target_y >= 0) {
-                                nk_uint scx, scy;
-                                nk_group_get_scroll(ctx, "BoneList", &scx, &scy);
-                                struct nk_rect content = nk_window_get_content_region(ctx);
-                                float rel_y = scroll_target_y - content.y + (float)scy;
-                                float new_scroll = rel_y - content.h * 0.3f;
-                                if (new_scroll < 0) new_scroll = 0;
-                                nk_group_set_scroll(ctx, "BoneList", scx, (nk_uint)new_scroll);
-                            }
-                            spine_scroll_to_bone = false;
-
-                            nk_group_end(ctx);
-                        }
-                        nk_style_pop_vec2(ctx);
-                        nk_style_pop_vec2(ctx);
 
                         nk_group_end(ctx);
                     }
@@ -4295,16 +3638,937 @@ int main(int argc, char *argv[])
 
                 nk_layout_row_end(ctx);
             }
-          } // end else (show_spine_viewer)
+            else
+            {
+                // ====== SPINE VIEWER INLINE ======
+                // Update animation
+                if (g_state.spine.viewer && g_state.spine.viewer->isLoaded())
+                {
+                    float dt = 0;
+                    if (g_state.spine.playing)
+                    {
+                        Uint64 now = SDL_GetPerformanceCounter();
+                        if (g_state.spine.last_tick > 0)
+                        {
+                            dt = (float)(now - g_state.spine.last_tick) / (float)SDL_GetPerformanceFrequency();
+                            dt *= g_state.spine.speed;
+                        }
+                        g_state.spine.last_tick = now;
+                    }
+                    g_state.spine.viewer->update(dt);
+                }
+
+                if (g_state.spine.building)
+                {
+                    nk_layout_row_dynamic(ctx, 30, 1);
+                    nk_label(ctx, "Building Spine dictionary...", NK_TEXT_CENTERED);
+                }
+                else if (g_state.spine.dictionary.IsBuilt())
+                {
+                    const auto &spine_entries_inline = g_state.spine.dictionary.GetEntries();
+                    const auto &root_cat = g_state.spine.dictionary.GetRootCategory();
+
+                    // Search bar
+                    nk_layout_row_begin(ctx, NK_STATIC, 28, 3);
+                    nk_layout_row_push(ctx, 60);
+                    nk_label(ctx, "Search:", NK_TEXT_LEFT);
+                    nk_layout_row_push(ctx, 250);
+                    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, g_state.spine.search_buffer, sizeof(g_state.spine.search_buffer), nk_filter_default);
+                    g_state.spine.search_query = g_state.spine.search_buffer;
+                    nk_layout_row_push(ctx, 200);
+                    std::string sstats = std::to_string(spine_entries_inline.size()) + " skeletons";
+                    nk_label_colored(ctx, sstats.c_str(), NK_TEXT_LEFT, nk_rgb(150, 200, 255));
+                    nk_layout_row_end(ctx);
+
+                    // Layout: list | viewport | editor
+                    float sw = (float)window_width;
+                    float sh = content_height - 30.0f;
+                    float iListW = sw * 0.22f;
+                    float iEditorW = g_state.spine.edit_mode ? sw * 0.30f : 0;
+                    float iViewerW = sw - iListW - iEditorW - 50.0f;
+
+                    nk_layout_row_begin(ctx, NK_STATIC, sh, g_state.spine.edit_mode ? 3 : 2);
+
+                    // Skeleton list
+                    g_state.spine.visible_indices.clear();
+                    nk_layout_row_push(ctx, iListW);
+                    if (nk_group_begin(ctx, "SpineListInline", NK_WINDOW_BORDER))
+                    {
+                        draw_spine_category(ctx, root_cat, spine_entries_inline, 0);
+                        nk_group_end(ctx);
+                    }
+
+                    // Viewer panel
+                    nk_layout_row_push(ctx, iViewerW);
+                    if (nk_group_begin(ctx, "SpineViewInline", NK_WINDOW_BORDER))
+                    {
+                        if (g_state.spine.viewer && g_state.spine.viewer->isLoaded())
+                        {
+                            // === Controls row 1: Anim, Skin, Play/Pause ===
+                            nk_layout_row_begin(ctx, NK_STATIC, 28, 8);
+
+                            nk_layout_row_push(ctx, 50);
+                            nk_label(ctx, "Anim:", NK_TEXT_LEFT);
+                            nk_layout_row_push(ctx, 160);
+                            auto anim_names = g_state.spine.viewer->getAnimationNames();
+                            if (!anim_names.empty())
+                            {
+                                g_state.spine.selected_animation = g_state.spine.viewer->getCurrentAnimIndex();
+                                if (g_state.spine.selected_animation >= (int)anim_names.size())
+                                    g_state.spine.selected_animation = 0;
+                                if (nk_combo_begin_label(ctx, anim_names[g_state.spine.selected_animation].c_str(), nk_vec2(200, 300)))
+                                {
+                                    nk_layout_row_dynamic(ctx, 22, 1);
+                                    for (int a = 0; a < (int)anim_names.size(); a++)
+                                    {
+                                        if (nk_combo_item_label(ctx, anim_names[a].c_str(), NK_TEXT_LEFT))
+                                        {
+                                            if (a != g_state.spine.selected_animation)
+                                            {
+                                                g_state.spine.selected_animation = a;
+                                                g_state.spine.viewer->setAnimation(anim_names[a], true);
+                                            }
+                                        }
+                                    }
+                                    nk_combo_end(ctx);
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 45);
+                            nk_label(ctx, "Skin:", NK_TEXT_LEFT);
+                            nk_layout_row_push(ctx, 120);
+                            auto skin_names = g_state.spine.viewer->getSkinNames();
+                            if (!skin_names.empty())
+                            {
+                                if (g_state.spine.selected_skin >= (int)skin_names.size())
+                                    g_state.spine.selected_skin = 0;
+                                if (nk_combo_begin_label(ctx, skin_names[g_state.spine.selected_skin].c_str(), nk_vec2(160, 300)))
+                                {
+                                    nk_layout_row_dynamic(ctx, 22, 1);
+                                    for (int s = 0; s < (int)skin_names.size(); s++)
+                                    {
+                                        if (nk_combo_item_label(ctx, skin_names[s].c_str(), NK_TEXT_LEFT))
+                                        {
+                                            if (s != g_state.spine.selected_skin)
+                                            {
+                                                g_state.spine.selected_skin = s;
+                                                g_state.spine.viewer->setSkin(skin_names[s]);
+                                            }
+                                        }
+                                    }
+                                    nk_combo_end(ctx);
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 60);
+                            if (nk_button_label(ctx, g_state.spine.playing ? "Pause" : "Play"))
+                            {
+                                g_state.spine.playing = !g_state.spine.playing;
+                                g_state.spine.viewer->setPlaying(g_state.spine.playing);
+                                if (g_state.spine.playing)
+                                    g_state.spine.last_tick = SDL_GetPerformanceCounter();
+                            }
+
+                            nk_layout_row_end(ctx);
+
+                            // === Controls row 2: Speed, Zoom, Flip, Edit, Reset, Export ===
+                            nk_layout_row_begin(ctx, NK_STATIC, 28, 13);
+
+                            nk_layout_row_push(ctx, 50);
+                            nk_label(ctx, "Speed:", NK_TEXT_LEFT);
+                            nk_layout_row_push(ctx, 120);
+                            nk_slider_float(ctx, 0.1f, &g_state.spine.speed, 3.0f, 0.1f);
+                            nk_layout_row_push(ctx, 40);
+                            char speed_label[16];
+                            snprintf(speed_label, sizeof(speed_label), "%.1fx", g_state.spine.speed);
+                            nk_label(ctx, speed_label, NK_TEXT_LEFT);
+
+                            nk_layout_row_push(ctx, 45);
+                            nk_label(ctx, "Zoom:", NK_TEXT_LEFT);
+                            nk_layout_row_push(ctx, 100);
+                            g_state.spine.zoom = g_state.spine.viewer->getZoom();
+                            nk_slider_float(ctx, 0.1f, &g_state.spine.zoom, 5.0f, 0.1f);
+                            nk_layout_row_push(ctx, 40);
+                            char zoom_label[16];
+                            snprintf(zoom_label, sizeof(zoom_label), "%.1fx", g_state.spine.zoom);
+                            nk_label(ctx, zoom_label, NK_TEXT_LEFT);
+                            g_state.spine.viewer->setZoom(g_state.spine.zoom);
+
+                            nk_layout_row_push(ctx, 60);
+                            {
+                                struct nk_style_button flip_style = ctx->style.button;
+                                flip_style.rounding = 3.0f;
+                                if (g_state.spine.flip_x)
+                                {
+                                    flip_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
+                                    flip_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
+                                }
+                                else
+                                {
+                                    flip_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+                                    flip_style.hover = nk_style_item_color(nk_rgb(75, 75, 80));
+                                }
+                                flip_style.text_normal = nk_rgb(220, 220, 220);
+                                flip_style.text_hover = nk_rgb(255, 255, 255);
+                                if (nk_button_label_styled(ctx, &flip_style, "Flip X"))
+                                {
+                                    g_state.spine.flip_x = !g_state.spine.flip_x;
+                                    g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 60);
+                            {
+                                struct nk_style_button flip_style = ctx->style.button;
+                                flip_style.rounding = 3.0f;
+                                if (g_state.spine.flip_y)
+                                {
+                                    flip_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
+                                    flip_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
+                                }
+                                else
+                                {
+                                    flip_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+                                    flip_style.hover = nk_style_item_color(nk_rgb(75, 75, 80));
+                                }
+                                flip_style.text_normal = nk_rgb(220, 220, 220);
+                                flip_style.text_hover = nk_rgb(255, 255, 255);
+                                if (nk_button_label_styled(ctx, &flip_style, "Flip Y"))
+                                {
+                                    g_state.spine.flip_y = !g_state.spine.flip_y;
+                                    g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 45);
+                            {
+                                struct nk_style_button edit_style = ctx->style.button;
+                                edit_style.rounding = 3.0f;
+                                if (g_state.spine.edit_mode)
+                                {
+                                    edit_style.normal = nk_style_item_color(nk_rgb(120, 80, 40));
+                                    edit_style.hover = nk_style_item_color(nk_rgb(140, 95, 50));
+                                }
+                                else
+                                {
+                                    edit_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+                                    edit_style.hover = nk_style_item_color(nk_rgb(75, 75, 80));
+                                }
+                                edit_style.text_normal = nk_rgb(220, 220, 220);
+                                edit_style.text_hover = nk_rgb(255, 255, 255);
+                                if (nk_button_label_styled(ctx, &edit_style, "Edit"))
+                                {
+                                    g_state.spine.edit_mode = !g_state.spine.edit_mode;
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 55);
+                            if (nk_button_label(ctx, "Reset"))
+                            {
+                                g_state.spine.zoom = 1.0f;
+                                g_state.spine.viewer->resetView();
+                            }
+
+                            nk_layout_row_push(ctx, 100);
+                            if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)spine_entries_inline.size())
+                            {
+                                if (nk_button_label(ctx, "Export All"))
+                                {
+                                    const auto &entry = spine_entries_inline[g_state.spine.selected_index];
+                                    try
+                                    {
+                                        auto d = pfd::select_folder("Select destination folder", ".");
+                                        if (!d.result().empty())
+                                        {
+                                            std::string dest = d.result();
+                                            int exported = 0;
+                                            {
+                                                std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*entry.scsp_node);
+                                                std::string json_str = SCSPParser::ConvertSCSPToJson(data);
+                                                if (!json_str.empty())
+                                                {
+                                                    try
+                                                    {
+                                                        json parsed = json::parse(json_str);
+                                                        json_str = parsed.dump(2);
+                                                    }
+                                                    catch (...)
+                                                    {
+                                                    }
+                                                    std::ofstream out(dest + "/" + entry.display_name + ".json");
+                                                    out << json_str;
+                                                    exported++;
+                                                }
+                                            }
+                                            if (entry.atlas_node)
+                                            {
+                                                std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*entry.atlas_node);
+                                                std::string atlas_str(data.begin(), data.end());
+                                                size_t p = 0;
+                                                while ((p = atlas_str.find(".sct", p)) != std::string::npos)
+                                                {
+                                                    atlas_str.replace(p, 4, ".png");
+                                                    p += 4;
+                                                }
+                                                std::ofstream out(dest + "/" + entry.atlas_node->name, std::ios::binary);
+                                                out << atlas_str;
+                                                exported++;
+                                            }
+                                            g_state.spine.dictionary.EnsureDetailsLoaded(*g_state.browser.data_pack, entry);
+                                            for (const auto *img : entry.image_nodes)
+                                            {
+                                                const auto &fi = std::get<Core::FileInfo>(img->data);
+                                                std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*img);
+                                                std::string out_name = img->name;
+                                                std::string el = fi.format;
+                                                std::transform(el.begin(), el.end(), el.begin(), ::tolower);
+                                                if (el == ".sct" || el == ".sct2")
+                                                {
+                                                    std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(data, false);
+                                                    if (!png_data.empty())
+                                                    {
+                                                        size_t dp = out_name.find_last_of('.');
+                                                        if (dp != std::string::npos)
+                                                            out_name = out_name.substr(0, dp);
+                                                        out_name += ".png";
+                                                        std::ofstream out(dest + "/" + out_name, std::ios::binary);
+                                                        out.write((const char *)png_data.data(), png_data.size());
+                                                        exported++;
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    std::ofstream out(dest + "/" + out_name, std::ios::binary);
+                                                    out.write((const char *)data.data(), data.size());
+                                                    exported++;
+                                                }
+                                            }
+                                            g_state.tasks.status = "Exported " + std::to_string(exported) + " files for '" + entry.display_name + "'";
+                                        }
+                                    }
+                                    catch (const std::exception &e)
+                                    {
+                                        g_state.tasks.status = "Export error: " + std::string(e.what());
+                                    }
+                                }
+                            }
+
+                            nk_layout_row_end(ctx);
+
+                            // === Controls row 3: Autoplay, Next, PMA ===
+                            static bool spine_autoplay = false;
+                            static bool spine_pma_blend = true;
+                            static bool spine_pma_tex = true;
+                            static int spine_bg_preset = 0; // 0=none, 1=dark, 2=mid, 3=white
+                            nk_layout_row_begin(ctx, NK_STATIC, 24, 7);
+
+                            nk_layout_row_push(ctx, 80);
+                            {
+                                struct nk_style_button ab = ctx->style.button;
+                                ab.rounding = 3.0f;
+                                ab.normal = nk_style_item_color(spine_autoplay ? nk_rgb(56, 120, 74) : nk_rgb(60, 60, 65));
+                                ab.hover = nk_style_item_color(spine_autoplay ? nk_rgb(66, 138, 86) : nk_rgb(75, 75, 80));
+                                ab.text_normal = nk_rgb(220, 220, 220);
+                                if (nk_button_label_styled(ctx, &ab, spine_autoplay ? "Auto: ON" : "Auto: OFF"))
+                                {
+                                    spine_autoplay = !spine_autoplay;
+                                    g_state.spine.viewer->setAutoplayNext(spine_autoplay);
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 50);
+                            if (nk_button_label(ctx, "Next"))
+                            {
+                                g_state.spine.viewer->nextAnimation();
+                                g_state.spine.selected_animation = g_state.spine.viewer->getCurrentAnimIndex();
+                            }
+
+                            nk_layout_row_push(ctx, 20);
+                            nk_spacing(ctx, 1);
+
+                            nk_layout_row_push(ctx, 80);
+                            {
+                                struct nk_style_button pb = ctx->style.button;
+                                pb.rounding = 3.0f;
+                                pb.normal = nk_style_item_color(spine_pma_blend ? nk_rgb(70, 90, 120) : nk_rgb(60, 60, 65));
+                                pb.hover = nk_style_item_color(nk_rgb(80, 100, 130));
+                                pb.text_normal = nk_rgb(200, 200, 200);
+                                if (nk_button_label_styled(ctx, &pb, spine_pma_blend ? "PMA: ON" : "PMA: OFF"))
+                                {
+                                    spine_pma_blend = !spine_pma_blend;
+                                    // Source textures from ASTC are already premultiplied —
+                                    // never re-premultiply, just toggle the blend mode
+                                    g_state.spine.viewer->setUsePMA(spine_pma_blend);
+                                    g_state.spine.viewer->setPremultiplyTextures(false);
+                                    if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)spine_entries_inline.size())
+                                    {
+                                        g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, spine_entries_inline[g_state.spine.selected_index]);
+                                    }
+                                }
+                            }
+
+                            nk_layout_row_push(ctx, 10);
+                            nk_spacing(ctx, 1);
+
+                            // Viewport background preset
+                            nk_layout_row_push(ctx, 80);
+                            {
+                                const char *bg_labels[] = {"BG: None", "BG: Dark", "BG: Gray", "BG: White"};
+                                const float bg_colors[][3] = {
+                                    {0, 0, 0}, {0.12f, 0.12f, 0.14f}, {0.35f, 0.35f, 0.38f}, {1.0f, 1.0f, 1.0f}};
+                                struct nk_style_button bb = ctx->style.button;
+                                bb.rounding = 3.0f;
+                                bb.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+                                bb.hover = nk_style_item_color(nk_rgb(75, 75, 80));
+                                bb.text_normal = nk_rgb(200, 200, 200);
+                                if (nk_button_label_styled(ctx, &bb, bg_labels[spine_bg_preset]))
+                                {
+                                    spine_bg_preset = (spine_bg_preset + 1) % 4;
+                                    g_state.spine.viewer->setBgColor(
+                                        bg_colors[spine_bg_preset][0],
+                                        bg_colors[spine_bg_preset][1],
+                                        bg_colors[spine_bg_preset][2]);
+                                }
+                            }
+
+                            nk_layout_row_end(ctx);
+
+                            // === Viewport ===
+                            float vpH = sh - 120.0f;
+                            if (vpH < 100)
+                                vpH = 100;
+                            nk_layout_row_dynamic(ctx, vpH, 1);
+                            struct nk_rect vb = nk_widget_bounds(ctx);
+                            int vw = (int)vb.w, vh = (int)vb.h;
+
+                            // Mouse interaction (skip if a combo/popup is active)
+                            {
+                                nk_input *inp = &ctx->input;
+                                bool popup_active = (ctx->current && ctx->current->popup.win);
+                                if (!popup_active && nk_input_is_mouse_hovering_rect(inp, vb))
+                                {
+                                    float scr = inp->mouse.scroll_delta.y;
+                                    float mdx = inp->mouse.delta.x, mdy = inp->mouse.delta.y;
+                                    Uint32 km = SDL_GetModState();
+
+                                    if (scr != 0 && !(km & KMOD_CTRL))
+                                    {
+                                        g_state.spine.viewer->zoomBy(scr > 0 ? 1.15f : 1.0f / 1.15f);
+                                        g_state.spine.zoom = g_state.spine.viewer->getZoom();
+                                    }
+                                    if (nk_input_is_mouse_down(inp, NK_BUTTON_MIDDLE) ||
+                                        nk_input_is_mouse_down(inp, NK_BUTTON_RIGHT) ||
+                                        (nk_input_is_mouse_down(inp, NK_BUTTON_LEFT) && (!g_state.spine.edit_mode || (km & KMOD_SHIFT))))
+                                    {
+                                        if (mdx != 0 || mdy != 0)
+                                        {
+                                            float s = g_state.spine.viewer->getZoom() > 0 ? (float)vw / g_state.spine.viewer->getZoom() / vw : 1;
+                                            g_state.spine.viewer->pan(mdx * s, -mdy * s);
+                                        }
+                                    }
+                                    if (g_state.spine.edit_mode && !g_state.spine.selected_bone.empty() && scr != 0 && (km & KMOD_CTRL))
+                                    {
+                                        auto bl = g_state.spine.viewer->getBoneList();
+                                        for (auto &b : bl)
+                                        {
+                                            if (b.name == g_state.spine.selected_bone)
+                                            {
+                                                BoneOverride o;
+                                                o.x = b.x;
+                                                o.y = b.y;
+                                                o.rotation = b.rotation;
+                                                o.scaleX = b.scaleX + scr * 0.05f;
+                                                o.scaleY = b.scaleY + scr * 0.05f;
+                                                o.shearX = b.shearX;
+                                                o.shearY = b.shearY;
+                                                g_state.spine.viewer->setBoneOverride(b.name, o);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (g_state.spine.edit_mode)
+                                    {
+                                        static SpineViewer::GizmoHandle ag = SpineViewer::GizmoHandle::None;
+                                        float lx = inp->mouse.pos.x - vb.x, ly = inp->mouse.pos.y - vb.y;
+                                        if (nk_input_is_mouse_pressed(inp, NK_BUTTON_LEFT) && !(km & KMOD_SHIFT))
+                                        {
+                                            ag = g_state.spine.viewer->hitTestGizmo(lx, ly, vw, vh);
+                                            if (ag == SpineViewer::GizmoHandle::None)
+                                            {
+                                                g_state.spine.selected_bone = g_state.spine.viewer->hitTestBone(lx, ly, vw, vh);
+                                                if (!g_state.spine.selected_bone.empty())
+                                                {
+                                                    ag = SpineViewer::GizmoHandle::Move;
+                                                    g_state.spine.scroll_to_bone = true;
+                                                }
+                                            }
+                                        }
+                                        if (!nk_input_is_mouse_down(inp, NK_BUTTON_LEFT))
+                                            ag = SpineViewer::GizmoHandle::None;
+                                        if (ag != SpineViewer::GizmoHandle::None && !g_state.spine.selected_bone.empty() && nk_input_is_mouse_down(inp, NK_BUTTON_LEFT) && (mdx != 0 || mdy != 0))
+                                        {
+                                            float s = g_state.spine.viewer->getZoom() > 0 ? (float)vw / g_state.spine.viewer->getZoom() / vw : 1;
+                                            auto bl = g_state.spine.viewer->getBoneList();
+                                            for (auto &b : bl)
+                                            {
+                                                if (b.name != g_state.spine.selected_bone)
+                                                    continue;
+                                                BoneOverride o;
+                                                o.x = b.x;
+                                                o.y = b.y;
+                                                o.rotation = b.rotation;
+                                                o.scaleX = b.scaleX;
+                                                o.scaleY = b.scaleY;
+                                                o.shearX = b.shearX;
+                                                o.shearY = b.shearY;
+                                                if (ag == SpineViewer::GizmoHandle::Move)
+                                                {
+                                                    o.x += mdx * s;
+                                                    o.y -= mdy * s;
+                                                }
+                                                else if (ag == SpineViewer::GizmoHandle::Rotate)
+                                                {
+                                                    o.rotation += mdx * 0.5f;
+                                                }
+                                                else
+                                                {
+                                                    o.scaleX += mdx * 0.005f;
+                                                    o.scaleY -= mdy * 0.005f;
+                                                }
+                                                g_state.spine.viewer->setBoneOverride(b.name, o);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (vw > 0 && vh > 0)
+                            {
+                                g_state.spine.viewer->render(vw, vh);
+                                GLuint ft = g_state.spine.viewer->getFBOTexture();
+                                if (ft)
+                                {
+                                    struct nk_image fimg = nk_image_id((int)ft);
+                                    nk_draw_image(nk_window_get_canvas(ctx), vb, &fimg, nk_rgb(255, 255, 255));
+                                }
+                            }
+                        }
+                        else if (g_state.spine.viewer && !g_state.spine.viewer->getError().empty())
+                        {
+                            nk_layout_row_dynamic(ctx, 30, 1);
+                            nk_label_colored(ctx, "Error:", NK_TEXT_CENTERED, nk_rgb(255, 100, 100));
+                            nk_layout_row_dynamic(ctx, 20, 1);
+                            nk_label(ctx, g_state.spine.viewer->getError().c_str(), NK_TEXT_CENTERED);
+                        }
+                        else
+                        {
+                            nk_layout_row_dynamic(ctx, 30, 1);
+                            nk_label(ctx, "Select a skeleton from the list", NK_TEXT_CENTERED);
+                        }
+                        nk_group_end(ctx);
+                    }
+
+                    // Bone editor panel (third column, only when editing)
+                    if (g_state.spine.edit_mode && g_state.spine.viewer && g_state.spine.viewer->isLoaded())
+                    {
+                        nk_layout_row_push(ctx, iEditorW);
+                        if (nk_group_begin(ctx, "BoneEditor", NK_WINDOW_BORDER))
+                        {
+                            nk_layout_row_dynamic(ctx, 24, 3);
+                            if (nk_button_label(ctx, "Reset All"))
+                            {
+                                g_state.spine.viewer->resetBoneEdits();
+                                g_state.spine.selected_bone = "";
+                            }
+
+                            static bool spine_export_pending = false;
+                            if (nk_button_label(ctx, "Export Modified"))
+                            {
+                                spine_export_pending = true;
+                            }
+
+                            auto texList = g_state.spine.viewer->getTextureList();
+                            if (texList.empty())
+                            {
+                                nk_spacing(ctx, 1);
+                            }
+
+                            if (spine_export_pending)
+                            {
+                                spine_export_pending = false;
+                                try
+                                {
+                                    auto d = pfd::select_folder("Select destination folder", ".");
+                                    if (!d.result().empty() && g_state.spine.selected_index >= 0)
+                                    {
+                                        std::string dest = d.result();
+                                        const auto &entry = spine_entries_inline[g_state.spine.selected_index];
+                                        int exported = 0;
+                                        std::string modJson = g_state.spine.viewer->getModifiedSkeletonJson();
+                                        if (!modJson.empty())
+                                        {
+                                            std::ofstream out(dest + "/" + entry.display_name + "_modified.json");
+                                            out << modJson;
+                                            exported++;
+                                        }
+                                        if (entry.atlas_node)
+                                        {
+                                            std::vector<uint8_t> ad = g_state.browser.data_pack->GetFileData(*entry.atlas_node);
+                                            std::string as(ad.begin(), ad.end());
+                                            size_t p = 0;
+                                            while ((p = as.find(".sct", p)) != std::string::npos)
+                                            {
+                                                as.replace(p, 4, ".png");
+                                                p += 4;
+                                            }
+                                            std::ofstream out(dest + "/" + entry.atlas_node->name, std::ios::binary);
+                                            out << as;
+                                            exported++;
+                                        }
+                                        for (const auto *img : entry.image_nodes)
+                                        {
+                                            const auto &fi = std::get<Core::FileInfo>(img->data);
+                                            std::vector<uint8_t> fd = g_state.browser.data_pack->GetFileData(*img);
+                                            std::string on = img->name;
+                                            std::string el = fi.format;
+                                            std::transform(el.begin(), el.end(), el.begin(), ::tolower);
+                                            if (el == ".sct" || el == ".sct2")
+                                            {
+                                                auto png = SCTParser::ConvertToPNG(fd, false);
+                                                if (!png.empty())
+                                                {
+                                                    size_t dp = on.find_last_of('.');
+                                                    if (dp != std::string::npos)
+                                                        on = on.substr(0, dp);
+                                                    on += ".png";
+                                                    std::ofstream out(dest + "/" + on, std::ios::binary);
+                                                    out.write((const char *)png.data(), png.size());
+                                                    exported++;
+                                                }
+                                            }
+                                            else
+                                            {
+                                                std::ofstream out(dest + "/" + on, std::ios::binary);
+                                                out.write((const char *)fd.data(), fd.size());
+                                                exported++;
+                                            }
+                                        }
+                                        g_state.tasks.status = "Exported " + std::to_string(exported) + " modified files";
+                                    }
+                                }
+                                catch (...)
+                                {
+                                }
+                            }
+
+                            // Bone search — ABOVE the scrollable list so it stays fixed
+                            static char bone_search_buf[128] = {0};
+                            nk_layout_row_begin(ctx, NK_STATIC, 20, 2);
+                            nk_layout_row_push(ctx, 50);
+                            nk_label(ctx, "Filter:", NK_TEXT_LEFT);
+                            nk_layout_row_push(ctx, iEditorW - 70);
+                            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, bone_search_buf, sizeof(bone_search_buf), nk_filter_default);
+                            nk_layout_row_end(ctx);
+                            std::string bone_query = bone_search_buf;
+                            std::transform(bone_query.begin(), bone_query.end(), bone_query.begin(), ::tolower);
+
+                            nk_layout_row_dynamic(ctx, sh - 105, 1);
+                            nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(2, 0));
+                            nk_style_push_vec2(ctx, &ctx->style.window.group_padding, nk_vec2(2, 2));
+                            if (nk_group_begin(ctx, "BoneList", NK_WINDOW_BORDER))
+                            {
+                                auto bones = g_state.spine.viewer->getBoneList();
+                                float scroll_target_y = -1;
+                                static bool spine_bone_just_reset = false;
+
+                                // Build parent->has_children lookup
+                                std::unordered_set<std::string> has_children;
+                                for (auto &b : bones)
+                                {
+                                    if (!b.parentName.empty())
+                                        has_children.insert(b.parentName);
+                                }
+
+                                for (size_t bi_idx = 0; bi_idx < bones.size(); bi_idx++)
+                                {
+                                    auto &bi = bones[bi_idx];
+
+                                    // Filter by search
+                                    if (!bone_query.empty())
+                                    {
+                                        std::string lower_name = bi.name;
+                                        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                                        if (lower_name.find(bone_query) == std::string::npos)
+                                            continue;
+                                    }
+
+                                    // Skip if an ancestor is collapsed in the list
+                                    if (bone_query.empty())
+                                    {
+                                        bool ancestor_collapsed = false;
+                                        // Walk up parents using the bone list data
+                                        std::string check = bi.parentName;
+                                        int safety = 0;
+                                        while (!check.empty() && safety++ < 20)
+                                        {
+                                            if (g_state.spine.collapsed_bones.count(check))
+                                            {
+                                                ancestor_collapsed = true;
+                                                break;
+                                            }
+                                            // Find parent's parent
+                                            bool found = false;
+                                            for (auto &pb : bones)
+                                            {
+                                                if (pb.name == check)
+                                                {
+                                                    check = pb.parentName;
+                                                    found = true;
+                                                    break;
+                                                }
+                                            }
+                                            if (!found)
+                                                break;
+                                        }
+                                        if (ancestor_collapsed)
+                                            continue;
+                                    }
+
+                                    bool is_sel = (bi.name == g_state.spine.selected_bone);
+                                    bool is_parent = has_children.count(bi.name) > 0;
+                                    bool is_collapsed = g_state.spine.collapsed_bones.count(bi.name) > 0;
+
+                                    // Bone row: indent spacer + name + H + R
+                                    float indent_px = bi.depth * 10.0f;
+                                    if (indent_px > 0)
+                                    {
+                                        int cols = 4;
+                                        nk_layout_row_begin(ctx, NK_STATIC, 16, cols);
+                                        nk_layout_row_push(ctx, indent_px);
+                                        // Draw tree line
+                                        struct nk_rect sp_bounds = nk_widget_bounds(ctx);
+                                        struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+                                        float line_x = sp_bounds.x + indent_px - 6;
+                                        nk_stroke_line(canvas, line_x, sp_bounds.y, line_x, sp_bounds.y + sp_bounds.h, 1.0f, nk_rgb(60, 65, 75));
+                                        nk_stroke_line(canvas, line_x, sp_bounds.y + sp_bounds.h * 0.5f, sp_bounds.x + indent_px, sp_bounds.y + sp_bounds.h * 0.5f, 1.0f, nk_rgb(60, 65, 75));
+                                        nk_spacing(ctx, 1);
+                                        float remaining = iEditorW - indent_px - 60;
+                                        nk_layout_row_push(ctx, remaining > 40 ? remaining : 40);
+                                    }
+                                    else
+                                    {
+                                        nk_layout_row_begin(ctx, NK_STATIC, 16, 3);
+                                        float remaining = iEditorW - 60;
+                                        nk_layout_row_push(ctx, remaining > 40 ? remaining : 40);
+                                    }
+
+                                    // Grab bounds for auto-scroll
+                                    if (is_sel && g_state.spine.scroll_to_bone)
+                                    {
+                                        struct nk_rect wb = nk_widget_bounds(ctx);
+                                        scroll_target_y = wb.y;
+                                    }
+
+                                    struct nk_style_button bone_btn = ctx->style.button;
+                                    bone_btn.text_alignment = NK_TEXT_LEFT;
+                                    bone_btn.padding = nk_vec2(3, 0);
+                                    bone_btn.rounding = 1.0f;
+                                    bone_btn.border = 0;
+                                    bone_btn.normal = nk_style_item_color(is_sel ? nk_rgb(50, 70, 110) : nk_rgb(35, 35, 40));
+                                    bone_btn.hover = nk_style_item_color(nk_rgb(55, 65, 80));
+                                    bone_btn.active = bone_btn.hover;
+                                    bone_btn.text_normal = bi.hidden        ? nk_rgb(100, 100, 100)
+                                                           : bi.hasOverride ? nk_rgb(255, 200, 80)
+                                                           : is_sel         ? nk_rgb(100, 200, 255)
+                                                                            : nk_rgb(180, 180, 180);
+                                    bone_btn.text_hover = nk_rgb(255, 255, 255);
+                                    std::string bone_label = bi.name;
+                                    if (is_parent)
+                                        bone_label = (is_collapsed ? "+ " : "- ") + bone_label;
+                                    if (nk_button_label_styled(ctx, &bone_btn, bone_label.c_str()))
+                                    {
+                                        if (is_parent && bi.name == g_state.spine.selected_bone)
+                                        {
+                                            // Second click on same parent toggles collapse
+                                            if (is_collapsed)
+                                                g_state.spine.collapsed_bones.erase(bi.name);
+                                            else
+                                                g_state.spine.collapsed_bones.insert(bi.name);
+                                        }
+                                        g_state.spine.selected_bone = bi.name;
+                                        g_state.spine.viewer->selectedBoneIndex = (int)bi_idx;
+                                        spine_bone_just_reset = false;
+                                    }
+
+                                    nk_layout_row_push(ctx, 24);
+                                    {
+                                        struct nk_style_button hb = ctx->style.button;
+                                        hb.rounding = 1.0f;
+                                        hb.border = 0;
+                                        hb.padding = nk_vec2(0, 0);
+                                        hb.normal = nk_style_item_color(bi.hidden ? nk_rgb(120, 50, 50) : nk_rgb(45, 45, 50));
+                                        hb.hover = nk_style_item_color(nk_rgb(80, 60, 60));
+                                        hb.text_normal = nk_rgb(200, 200, 200);
+                                        if (nk_button_label_styled(ctx, &hb, bi.hidden ? "H" : "V"))
+                                        {
+                                            g_state.spine.viewer->toggleBoneHidden(bi.name);
+                                        }
+                                    }
+
+                                    nk_layout_row_push(ctx, 24);
+                                    {
+                                        struct nk_style_button rb = ctx->style.button;
+                                        rb.padding = nk_vec2(0, 0);
+                                        rb.border = 0;
+                                        rb.rounding = 1.0f;
+                                        if (nk_button_label_styled(ctx, &rb, "R"))
+                                        {
+                                            g_state.spine.viewer->resetBone(bi.name);
+                                            spine_bone_just_reset = true;
+                                        }
+                                    }
+                                    nk_layout_row_end(ctx);
+
+                                    if (is_sel)
+                                    {
+                                        // Auto-create override if not editing (skip if just reset)
+                                        if (!bi.hasOverride && !spine_bone_just_reset)
+                                        {
+                                            BoneOverride ovr;
+                                            ovr.x = bi.setupX;
+                                            ovr.y = bi.setupY;
+                                            ovr.rotation = bi.setupRot;
+                                            ovr.scaleX = bi.setupSX;
+                                            ovr.scaleY = bi.setupSY;
+                                            ovr.shearX = bi.setupShX;
+                                            ovr.shearY = bi.setupShY;
+                                            g_state.spine.viewer->setBoneOverride(bi.name, ovr);
+                                        }
+                                        if (bi.hasOverride)
+                                            spine_bone_just_reset = false;
+
+                                        const char *labels[] = {"X", "Y", "Rot", "SclX", "SclY", "ShrX", "ShrY"};
+                                        float anim[7] = {bi.animX, bi.animY, bi.animRot, bi.animSX, bi.animSY, bi.animShX, bi.animShY};
+                                        float setup[7] = {bi.setupX, bi.setupY, bi.setupRot, bi.setupSX, bi.setupSY, bi.setupShX, bi.setupShY};
+
+                                        static bool spine_link_scale = true;
+                                        nk_layout_row_dynamic(ctx, 16, 2);
+                                        nk_label_colored(ctx, "Editing:", NK_TEXT_LEFT, nk_rgb(255, 200, 80));
+                                        {
+                                            struct nk_style_button lb = ctx->style.button;
+                                            lb.rounding = 1.0f;
+                                            lb.padding = nk_vec2(2, 0);
+                                            lb.border = 0;
+                                            lb.normal = nk_style_item_color(spine_link_scale ? nk_rgb(56, 120, 74) : nk_rgb(60, 60, 65));
+                                            lb.hover = nk_style_item_color(spine_link_scale ? nk_rgb(66, 138, 86) : nk_rgb(75, 75, 80));
+                                            lb.text_normal = nk_rgb(200, 200, 200);
+                                            if (nk_button_label_styled(ctx, &lb, spine_link_scale ? "Scale: Linked" : "Scale: Free"))
+                                            {
+                                                spine_link_scale = !spine_link_scale;
+                                            }
+                                        }
+
+                                        float vals[7] = {bi.x, bi.y, bi.rotation, bi.scaleX, bi.scaleY, bi.shearX, bi.shearY};
+                                        float oldSclX = vals[3], oldSclY = vals[4];
+                                        float steps[7] = {1.0f, 1.0f, 1.0f, 0.05f, 0.05f, 0.5f, 0.5f};
+                                        float pxStep[7] = {0.5f, 0.5f, 0.5f, 0.01f, 0.01f, 0.1f, 0.1f};
+                                        for (int f = 0; f < 7; f++)
+                                        {
+                                            float range = fmaxf(fmaxf(fabsf(vals[f]), fabsf(setup[f])) * 3.0f, 10.0f);
+                                            nk_layout_row_dynamic(ctx, 18, 1);
+                                            vals[f] = nk_propertyf(ctx, labels[f], -range, vals[f], range, steps[f], pxStep[f]);
+                                        }
+
+                                        if (spine_link_scale)
+                                        {
+                                            float dsx = vals[3] - oldSclX, dsy = vals[4] - oldSclY;
+                                            if (dsx != 0 && dsy == 0)
+                                                vals[4] += dsx;
+                                            if (dsy != 0 && dsx == 0)
+                                                vals[3] += dsy;
+                                        }
+
+                                        BoneOverride ovr;
+                                        ovr.x = vals[0];
+                                        ovr.y = vals[1];
+                                        ovr.rotation = vals[2];
+                                        ovr.scaleX = vals[3];
+                                        ovr.scaleY = vals[4];
+                                        ovr.shearX = vals[5];
+                                        ovr.shearY = vals[6];
+                                        g_state.spine.viewer->setBoneOverride(bi.name, ovr);
+
+                                        // Animated values
+                                        nk_layout_row_dynamic(ctx, 13, 1);
+                                        nk_label_colored(ctx, "Animated:", NK_TEXT_LEFT, nk_rgb(100, 180, 255));
+                                        nk_layout_row_dynamic(ctx, 13, 4);
+                                        for (int f = 0; f < 7; f++)
+                                        {
+                                            char abuf[24];
+                                            snprintf(abuf, sizeof(abuf), "%s:%.1f", labels[f], anim[f]);
+                                            nk_label_colored(ctx, abuf, NK_TEXT_LEFT, nk_rgb(80, 150, 220));
+                                            if (f == 3)
+                                            {
+                                                nk_layout_row_dynamic(ctx, 13, 4);
+                                            }
+                                        }
+
+                                        // Setup pose
+                                        nk_layout_row_dynamic(ctx, 13, 1);
+                                        nk_label_colored(ctx, "Setup:", NK_TEXT_LEFT, nk_rgb(100, 200, 100));
+                                        nk_layout_row_dynamic(ctx, 13, 4);
+                                        for (int f = 0; f < 7; f++)
+                                        {
+                                            char sbuf[24];
+                                            snprintf(sbuf, sizeof(sbuf), "%s:%.1f", labels[f], setup[f]);
+                                            nk_label_colored(ctx, sbuf, NK_TEXT_LEFT, nk_rgb(80, 170, 80));
+                                            if (f == 3)
+                                            {
+                                                nk_layout_row_dynamic(ctx, 13, 4);
+                                            }
+                                        }
+
+                                        nk_layout_row_dynamic(ctx, 2, 1);
+                                        nk_spacing(ctx, 1);
+                                    }
+                                }
+
+                                // Auto-scroll
+                                if (g_state.spine.scroll_to_bone && scroll_target_y >= 0)
+                                {
+                                    nk_uint scx, scy;
+                                    nk_group_get_scroll(ctx, "BoneList", &scx, &scy);
+                                    struct nk_rect content = nk_window_get_content_region(ctx);
+                                    float rel_y = scroll_target_y - content.y + (float)scy;
+                                    float new_scroll = rel_y - content.h * 0.3f;
+                                    if (new_scroll < 0)
+                                        new_scroll = 0;
+                                    nk_group_set_scroll(ctx, "BoneList", scx, (nk_uint)new_scroll);
+                                }
+                                g_state.spine.scroll_to_bone = false;
+
+                                nk_group_end(ctx);
+                            }
+                            nk_style_pop_vec2(ctx);
+                            nk_style_pop_vec2(ctx);
+
+                            nk_group_end(ctx);
+                        }
+                    }
+
+                    nk_layout_row_end(ctx);
+                }
+            } // end else (show_spine_viewer)
 
             nk_layout_row_dynamic(ctx, 28, 1);
             if (selection_exists)
             {
                 try
                 {
-                    if (std::holds_alternative<Core::FileInfo>(selected_node->data))
+                    if (std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
                     {
-                        const auto &info = std::get<Core::FileInfo>(selected_node->data);
+                        const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
                     }
                 }
                 catch (...)
@@ -4322,24 +4586,24 @@ int main(int argc, char *argv[])
         SDL_GL_SwapWindow(win);
     }
 
-    if (preview_texture)
-        glDeleteTextures(1, &preview_texture);
-    if (sct_preview_texture)
-        glDeleteTextures(1, &sct_preview_texture);
+    if (g_state.preview.texture)
+        glDeleteTextures(1, &g_state.preview.texture);
+    if (g_state.sct.texture)
+        glDeleteTextures(1, &g_state.sct.texture);
     nk_sdl_shutdown();
     SDL_GL_DeleteContext(glContext);
     SDL_DestroyWindow(win);
-    if (image_window)
+    if (g_state.image.window)
     {
-        if (image_window_texture)
+        if (g_state.image.texture)
         {
-            SDL_DestroyTexture(image_window_texture);
+            SDL_DestroyTexture(g_state.image.texture);
         }
-        if (image_renderer)
+        if (g_state.image.renderer)
         {
-            SDL_DestroyRenderer(image_renderer);
+            SDL_DestroyRenderer(g_state.image.renderer);
         }
-        SDL_DestroyWindow(image_window);
+        SDL_DestroyWindow(g_state.image.window);
     }
     IMG_Quit();
     SDL_Quit();
