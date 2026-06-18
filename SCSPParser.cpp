@@ -4,8 +4,6 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
-#include <sstream>
-#include <iomanip>
 #include <map>
 
 using json = nlohmann::ordered_json;
@@ -1044,7 +1042,7 @@ namespace SCSPParser
                 json att;
 
                 if (atype == 0)
-                { 
+                {
                     // Region
                     if (pos + 24 > buf_size)
                         break;

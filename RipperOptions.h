@@ -1,5 +1,4 @@
 #pragma once
-
 #include <algorithm>
 #include <fstream>
 #include <string>
@@ -30,11 +29,11 @@ namespace RipperOptionsInternal
         std::string normalized = trimCopy(value);
         std::transform(normalized.begin(), normalized.end(), normalized.begin(), ::tolower);
 
-        if (normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on")
+        if (normalized == "1" || normalized == "true")
         {
             return true;
         }
-        if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off")
+        if (normalized == "0" || normalized == "false")
         {
             return false;
         }
@@ -52,9 +51,9 @@ inline void SaveRipperOptions(const RipperOptions &options, const std::string &i
     }
 
     out << "[options]\n";
-    out << "export_sct_as_png=" << (options.exportSctAsPng ? 1 : 0) << "\n";
-    out << "export_db_as_json=" << (options.exportDbAsJson ? 1 : 0) << "\n";
-    out << "enable_open_folder=" << (options.enableOpenFolder ? 1 : 0) << "\n";
+    out << "export_sct_as_png=" << (options.exportSctAsPng ? true : false) << "\n";
+    out << "export_db_as_json=" << (options.exportDbAsJson ? true : false) << "\n";
+    out << "enable_open_folder=" << (options.enableOpenFolder ? true : false) << "\n";
     out.flush();
 }
 

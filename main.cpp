@@ -143,6 +143,33 @@ static char spine_scale_max_buf[16] = "1000";
 static bool spine_scroll_to_bone = false;
 static std::unordered_set<std::string> spine_collapsed_bones; // folded in list only, not hidden
 
+// Diff viewer state
+enum class DiffStatus {
+    Unchanged,
+    Added,
+    Modified,
+    Removed
+};
+
+struct DiffNode {
+    std::string name;
+    std::string full_path;
+    bool is_folder;
+    uint64_t size;
+    std::string format;
+    DiffStatus status;
+    std::vector<std::unique_ptr<DiffNode>> children;
+};
+
+static bool show_diff_tree = false;
+static std::unique_ptr<DiffNode> diff_root;
+static std::unordered_set<const DiffNode*> expanded_diff_folders;
+static const DiffNode* selected_diff_node = nullptr;
+static std::vector<const DiffNode*> visible_diff_nodes;
+static std::unordered_set<const DiffNode*> selected_diff_nodes;
+static const DiffNode *last_clicked_diff_node = nullptr;
+
+
 static void save_options_to_ini()
 {
     RipperOptions options;
@@ -1155,6 +1182,441 @@ void export_to_json()
     }
 }
 
+static void flatten_old_json(const nlohmann::ordered_json& j, std::map<std::string, uint64_t>& out_map) {
+    if (j.contains("type") && j["type"] == "file") {
+        if (j.contains("path") && j.contains("size")) {
+            out_map[j["path"].get<std::string>()] = j["size"].get<uint64_t>();
+        }
+    } else if (j.contains("type") && j["type"] == "folder" && j.contains("children")) {
+        for (const auto& child : j["children"]) {
+            flatten_old_json(child, out_map);
+        }
+    }
+}
+
+static void flatten_new_tree(const Core::FileNode& node, std::map<std::string, uint64_t>& out_map) {
+    if (std::holds_alternative<Core::FileInfo>(node.data)) {
+        const auto& info = std::get<Core::FileInfo>(node.data);
+        out_map[node.full_path] = info.size;
+    } else {
+        const auto& folder = std::get<Core::FolderInfo>(node.data);
+        for (const auto& child : folder.children) {
+            flatten_new_tree(child, out_map);
+        }
+    }
+}
+
+static void insert_diff_node(DiffNode* root, const std::string& path, uint64_t size, DiffStatus status) {
+    std::string norm_path = path;
+    std::replace(norm_path.begin(), norm_path.end(), '\\', '/');
+
+    std::vector<std::string> parts;
+    std::stringstream ss(norm_path);
+    std::string part;
+    while(std::getline(ss, part, '/')) {
+        if(!part.empty()) parts.push_back(part);
+    }
+
+    DiffNode* current = root;
+    std::string current_full_path = "";
+    for (size_t i = 0; i < parts.size(); i++) {
+        if (!current_full_path.empty()) current_full_path += "/";
+        current_full_path += parts[i];
+
+        bool is_last = (i == parts.size() - 1);
+
+        auto it = std::find_if(current->children.begin(), current->children.end(), [&](const std::unique_ptr<DiffNode>& n) {
+            return n->name == parts[i];
+        });
+
+        if (it != current->children.end()) {
+            current = it->get();
+            if (is_last) {
+                if (status != DiffStatus::Unchanged) current->status = status;
+            } else {
+                if (status != DiffStatus::Unchanged && current->status == DiffStatus::Unchanged) {
+                    current->status = DiffStatus::Modified;
+                }
+            }
+        } else {
+            auto new_node = std::make_unique<DiffNode>();
+            new_node->name = parts[i];
+            new_node->full_path = current_full_path;
+            new_node->is_folder = !is_last;
+
+            if (is_last) {
+                new_node->size = size;
+                new_node->status = status;
+                size_t dot_pos = parts[i].find_last_of('.');
+                if (dot_pos != std::string::npos) {
+                    new_node->format = parts[i].substr(dot_pos);
+                } else {
+                    new_node->format = "";
+                }
+            } else {
+                new_node->size = 0;
+                new_node->status = (status == DiffStatus::Unchanged) ? DiffStatus::Unchanged : DiffStatus::Modified;
+            }
+
+            current->children.push_back(std::move(new_node));
+            current = current->children.back().get();
+        }
+    }
+}
+
+static void build_diff_tree(const nlohmann::ordered_json& old_json) {
+    std::map<std::string, uint64_t> old_map;
+    flatten_old_json(old_json, old_map);
+
+    std::map<std::string, uint64_t> new_map;
+    if (data_pack) {
+        flatten_new_tree(data_pack->GetFileTree(), new_map);
+    }
+
+    diff_root = std::make_unique<DiffNode>();
+    diff_root->name = "Diff Root";
+    diff_root->full_path = "";
+    diff_root->is_folder = true;
+    diff_root->status = DiffStatus::Unchanged;
+
+    for (const auto& kv : old_map) {
+        const std::string& path = kv.first;
+        uint64_t old_size = kv.second;
+
+        auto it = new_map.find(path);
+        if (it == new_map.end()) {
+            insert_diff_node(diff_root.get(), path, old_size, DiffStatus::Removed);
+        } else {
+            if (it->second != old_size) {
+                insert_diff_node(diff_root.get(), path, it->second, DiffStatus::Modified);
+            } else {
+                insert_diff_node(diff_root.get(), path, it->second, DiffStatus::Unchanged);
+            }
+        }
+    }
+
+    for (const auto& kv : new_map) {
+        const std::string& path = kv.first;
+        uint64_t new_size = kv.second;
+        if (old_map.find(path) == old_map.end()) {
+            insert_diff_node(diff_root.get(), path, new_size, DiffStatus::Added);
+        }
+    }
+
+    std::function<void(DiffNode*)> sort_tree = [&](DiffNode* node) {
+        std::sort(node->children.begin(), node->children.end(), [](const std::unique_ptr<DiffNode>& a, const std::unique_ptr<DiffNode>& b) {
+            if (a->is_folder != b->is_folder) return a->is_folder > b->is_folder;
+            return a->name < b->name;
+        });
+        for (auto& child : node->children) {
+            sort_tree(child.get());
+        }
+    };
+    sort_tree(diff_root.get());
+
+    show_diff_tree = true;
+    expanded_diff_folders.clear();
+    expanded_diff_folders.insert(diff_root.get());
+    selected_diff_node = nullptr;
+    selected_diff_nodes.clear();
+}
+
+static void set_file_tree_mode()
+{
+    show_spine_viewer = false;
+    show_diff_tree = false;
+}
+
+static void set_spine_viewer_mode()
+{
+    show_diff_tree = false;
+    show_spine_viewer = true;
+}
+
+static bool load_diff_tree_from_filemap()
+{
+    try
+    {
+        auto f = pfd::open_file("Select an older filemap.json", ".", {"JSON Files", "*.json", "All Files", "*.*"});
+        if (f.result().empty())
+        {
+            return false;
+        }
+
+        std::ifstream in(f.result()[0]);
+        if (!in.is_open())
+        {
+            status_text = "Error opening filemap.json for diff.";
+            return false;
+        }
+
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+
+        nlohmann::ordered_json old_json = nlohmann::ordered_json::parse(content);
+        build_diff_tree(old_json);
+        status_text = "Diff view generated.";
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        status_text = "Error parsing JSON: " + std::string(e.what());
+        return false;
+    }
+}
+
+static bool activate_diff_viewer()
+{
+    if (!diff_root)
+    {
+        if (!load_diff_tree_from_filemap())
+        {
+            return false;
+        }
+    }
+
+    show_spine_viewer = false;
+    show_diff_tree = true;
+    return true;
+}
+
+static std::string diff_status_label(DiffStatus status)
+{
+    switch (status)
+    {
+    case DiffStatus::Added:
+        return "[ADD] ";
+    case DiffStatus::Modified:
+        return "[MOD] ";
+    case DiffStatus::Removed:
+        return "[DEL] ";
+    default:
+        return "";
+    }
+}
+
+static std::string diff_display_name(const DiffNode &node)
+{
+    return diff_status_label(node.status) + node.name;
+}
+
+static void handle_diff_node_click(const DiffNode *node, bool is_folder)
+{
+    bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
+    Uint32 current_time = SDL_GetTicks();
+    Uint32 time_diff = current_time - last_click_time;
+
+    if (time_diff < 250 && node == last_clicked_diff_node)
+    {
+        last_click_time = current_time;
+        return;
+    }
+
+    if (ctrl_pressed)
+    {
+        if (selected_diff_nodes.find(node) != selected_diff_nodes.end())
+        {
+            selected_diff_nodes.erase(node);
+        }
+        else
+        {
+            selected_diff_nodes.insert(node);
+        }
+        selected_diff_node = node;
+    }
+    else
+    {
+        selected_diff_nodes.clear();
+        selected_diff_nodes.insert(node);
+        selected_diff_node = node;
+    }
+
+    last_click_time = current_time;
+    last_clicked_diff_node = node;
+}
+
+static int get_diff_file_count(const DiffNode& node)
+{
+    if (!node.is_folder) return 1;
+    int count = 0;
+    for (const auto& child : node.children)
+    {
+        count += get_diff_file_count(*child);
+    }
+    return count;
+}
+
+static uint64_t get_diff_folder_size(const DiffNode& node)
+{
+    if (!node.is_folder) return node.size;
+    uint64_t size = 0;
+    for (const auto& child : node.children)
+    {
+        size += get_diff_folder_size(*child);
+    }
+    return size;
+}
+
+static bool matches_diff_search(const DiffNode& node, const std::string& query)
+{
+    if (query.empty()) return true;
+    std::string name_lower = node.name;
+    std::string query_lower = query;
+    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+    std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
+    return name_lower.find(query_lower) != std::string::npos;
+}
+
+static bool has_matching_diff_child(const DiffNode& node, const std::string& query)
+{
+    if (query.empty()) return true;
+    if (matches_diff_search(node, query)) return true;
+    if (node.is_folder)
+    {
+        for (const auto& child : node.children)
+        {
+            if (has_matching_diff_child(*child, query))
+                return true;
+        }
+    }
+    return false;
+}
+
+static void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
+{
+    try
+    {
+        if (!has_matching_diff_child(node, search_query))
+            return;
+
+        visible_diff_nodes.push_back(&node);
+
+        if (node.is_folder)
+        {
+            bool is_expanded = expanded_diff_folders.find(&node) != expanded_diff_folders.end();
+            bool is_selected = (selected_diff_nodes.find(&node) != selected_diff_nodes.end()) || (selected_diff_node == &node);
+
+            struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
+            if (is_selected) bg_color = nk_rgb(65, 65, 70);
+
+            nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
+            nk_layout_row_push(ctx, depth * 16.0f + 10.0f);
+            nk_spacing(ctx, 1);
+
+            nk_layout_row_push(ctx, 24.0f);
+            struct nk_style_button expand_style = ctx->style.button;
+            expand_style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
+            expand_style.hover = nk_style_item_color(nk_rgb(80, 80, 85));
+            expand_style.text_normal = nk_rgb(200, 200, 200);
+            expand_style.text_hover = nk_rgb(255, 255, 255);
+            expand_style.rounding = 3.0f;
+
+            if (nk_button_label_styled(ctx, &expand_style, is_expanded ? "-" : "+"))
+            {
+                if (is_expanded)
+                    expanded_diff_folders.erase(&node);
+                else
+                    expanded_diff_folders.insert(&node);
+            }
+
+            nk_layout_row_push(ctx, 370.0f);
+            struct nk_style_button button_style = ctx->style.button;
+            button_style.normal = nk_style_item_color(bg_color);
+            button_style.hover = nk_style_item_color(is_selected ? nk_rgb(85, 85, 95) : nk_rgb(50, 50, 55));
+            button_style.active = nk_style_item_color(nk_rgb(70, 70, 80));
+
+            struct nk_color text_color = is_selected ? nk_rgb(255, 255, 255) : nk_rgb(220, 220, 220);
+            if (!is_selected) {
+                if (node.status == DiffStatus::Added) text_color = nk_rgb(100, 255, 100);
+                else if (node.status == DiffStatus::Modified) text_color = nk_rgb(255, 200, 50);
+                else if (node.status == DiffStatus::Removed) text_color = nk_rgb(255, 100, 100);
+            }
+
+            button_style.text_normal = text_color;
+            button_style.text_hover = nk_rgb(255, 255, 255);
+            button_style.text_active = nk_rgb(255, 255, 255);
+            button_style.text_alignment = NK_TEXT_LEFT;
+            button_style.padding = nk_vec2(8, 4);
+            button_style.rounding = 3.0f;
+
+            std::string folder_label = diff_display_name(node);
+            if (nk_button_label_styled(ctx, &button_style, folder_label.c_str()))
+            {
+                handle_diff_node_click(&node, true);
+            }
+
+            nk_layout_row_push(ctx, 200.0f);
+            int file_count = get_diff_file_count(node);
+            std::string info = std::to_string(file_count) + " items | " + format_size(get_diff_folder_size(node));
+            nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
+
+            nk_layout_row_end(ctx);
+
+            if (is_expanded)
+            {
+                for (const auto &child : node.children)
+                    draw_diff_node(ctx, *child, depth + 1);
+            }
+        }
+        else
+        {
+            if (!matches_diff_search(node, search_query))
+                return;
+
+            bool is_selected = (selected_diff_nodes.find(&node) != selected_diff_nodes.end()) || (selected_diff_node == &node);
+
+            struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
+            if (is_selected)
+                bg_color = nk_rgb(65, 65, 70);
+
+            nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
+            nk_layout_row_push(ctx, depth * 16.0f + 10.0f);
+            nk_spacing(ctx, 1);
+
+            nk_layout_row_push(ctx, 24.0f);
+            nk_spacing(ctx, 1);
+
+            nk_layout_row_push(ctx, 370.0f);
+            struct nk_style_button button_style = ctx->style.button;
+            button_style.normal = nk_style_item_color(bg_color);
+            button_style.hover = nk_style_item_color(is_selected ? nk_rgb(85, 85, 95) : nk_rgb(50, 50, 55));
+            button_style.active = nk_style_item_color(nk_rgb(70, 70, 80));
+
+            struct nk_color text_color = is_selected ? nk_rgb(255, 255, 255) : nk_rgb(200, 200, 200);
+            if (!is_selected) {
+                if (node.status == DiffStatus::Added) text_color = nk_rgb(100, 255, 100);
+                else if (node.status == DiffStatus::Modified) text_color = nk_rgb(255, 200, 50);
+                else if (node.status == DiffStatus::Removed) text_color = nk_rgb(255, 100, 100);
+            }
+
+            button_style.text_normal = text_color;
+            button_style.text_hover = nk_rgb(255, 255, 255);
+            button_style.text_active = nk_rgb(255, 255, 255);
+            button_style.text_alignment = NK_TEXT_LEFT;
+            button_style.padding = nk_vec2(8, 4);
+            button_style.rounding = 3.0f;
+
+            std::string file_label = diff_display_name(node);
+
+            if (nk_button_label_styled(ctx, &button_style, file_label.c_str()))
+            {
+                handle_diff_node_click(&node, false);
+            }
+
+            nk_layout_row_push(ctx, 200.0f);
+            std::string size_str = format_size(node.size) + " | " + node.format;
+            nk_label_colored(ctx, size_str.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
+
+            nk_layout_row_end(ctx);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error drawing diff node: " << e.what() << std::endl;
+    }
+}
+// ------------------------------------
+
 void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
 {
     try
@@ -1920,7 +2382,7 @@ int main(int argc, char *argv[])
         if (show_export_options_window)
         {
             const float export_options_width = 530.0f;
-            const float export_options_height = 480.0f;
+            const float export_options_height = 460.0f;
             const float export_options_x = (window_width - export_options_width) * 0.5f;
             const float export_options_y = (window_height - export_options_height) * 0.5f;
             if (nk_begin(ctx, "Export Options", nk_rect(export_options_x, export_options_y, export_options_width, export_options_height),
@@ -2037,13 +2499,6 @@ int main(int argc, char *argv[])
 
 
                 nk_layout_row_dynamic(ctx, 25, 1);
-                std::string status1 = export_sct_as_png ? "SCT to PNG: ENABLED" : "SCT to PNG: DISABLED";
-                nk_label_colored(ctx, status1.c_str(), NK_TEXT_LEFT,
-                                 export_sct_as_png ? nk_rgb(100, 255, 100) : nk_rgb(255, 150, 150));
-
-                std::string status2 = export_db_as_json ? "DB to JSON: ENABLED" : "DB to JSON: DISABLED";
-                nk_label_colored(ctx, status2.c_str(), NK_TEXT_LEFT,
-                                 export_db_as_json ? nk_rgb(100, 255, 100) : nk_rgb(255, 150, 150));
 
                 nk_layout_row_dynamic(ctx, 30, 2);
                 if (nk_button_label(ctx, "OK"))
@@ -2180,7 +2635,7 @@ int main(int argc, char *argv[])
             bool has_file_selection = !selected_file_nodes.empty();
             bool has_extract_selection = has_file_selection || (selected_node != nullptr);
 
-            nk_layout_row_dynamic(ctx, 38, enable_open_folder ? 9 : 8);
+            nk_layout_row_dynamic(ctx, 38, enable_open_folder ? 10 : 9);
 
             struct nk_style_button btn_style = ctx->style.button;
             btn_style.rounding = 4.0f;
@@ -2230,6 +2685,12 @@ int main(int argc, char *argv[])
                         if (active_spine_viewer) active_spine_viewer->unload();
                         active_spine_viewer.reset();
                         spine_expanded_categories.clear();
+                        show_diff_tree = false;
+                        diff_root.reset();
+                        visible_diff_nodes.clear();
+                        expanded_diff_folders.clear();
+                        selected_diff_nodes.clear();
+                        selected_diff_node = nullptr;
 
                         data_pack = std::make_unique<DataPack>(wpath);
                         if (data_pack->GetType() == DataPack::PackType::Unknown)
@@ -2295,6 +2756,12 @@ int main(int argc, char *argv[])
                             if (active_spine_viewer) active_spine_viewer->unload();
                             active_spine_viewer.reset();
                             spine_expanded_categories.clear();
+                            show_diff_tree = false;
+                            diff_root.reset();
+                            visible_diff_nodes.clear();
+                            expanded_diff_folders.clear();
+                            selected_diff_nodes.clear();
+                            selected_diff_node = nullptr;
 
                             data_pack = std::make_unique<DataPack>(wpath);
                             if (data_pack->GetType() == DataPack::PackType::Unknown)
@@ -2380,15 +2847,33 @@ int main(int argc, char *argv[])
                             spine_building = false;
                         });
                     }
-                    show_spine_viewer = true;
+                    set_spine_viewer_mode();
                 } else {
-                    show_spine_viewer = false;
+                    set_file_tree_mode();
                 }
             }
             else if (!tree_scanned || is_task_running)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Spine Viewer");
+                nk_widget_disable_end(ctx);
+            }
+
+            if (tree_scanned && !is_task_running && nk_button_label_styled(ctx, &btn_style, show_diff_tree ? "File Tree" : "Diff Viewer"))
+            {
+                if (show_diff_tree)
+                {
+                    set_file_tree_mode();
+                }
+                else
+                {
+                    activate_diff_viewer();
+                }
+            }
+            else if (!tree_scanned || is_task_running)
+            {
+                nk_widget_disable_begin(ctx);
+                nk_button_label_styled(ctx, &btn_style, show_diff_tree ? "File Tree" : "Diff Viewer");
                 nk_widget_disable_end(ctx);
             }
 
@@ -2542,44 +3027,81 @@ int main(int argc, char *argv[])
 
                 if (data_pack && tree_scanned)
                 {
-                    draw_file_node(ctx, data_pack->GetFileTree());
-
-                    if (scroll_to_selected && selected_node)
+                    if (show_diff_tree && diff_root)
                     {
-                        auto it = std::find(visible_nodes.begin(), visible_nodes.end(), selected_node);
-                        if (it != visible_nodes.end())
+                        draw_diff_node(ctx, *diff_root);
+
+                        if (scroll_to_selected && selected_diff_node)
                         {
-                            int index = std::distance(visible_nodes.begin(), it);
-                            nk_uint current_x, current_y;
-                            nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
-
-                            float row_height = 26.0f + ctx->style.window.spacing.y;
-                            float node_y = index * row_height;
-                            float view_h = nk_window_get_content_region(ctx).h;
-
-                            // keep the selected row inside a safe visible band so keyboard navigation
-                            // doesn't outrun scrolling when moving downward quickly.
-                            float top_margin = row_height * 2.0f;
-                            float bottom_margin = row_height * 2.0f;
-                            float visible_top = (float)current_y + top_margin;
-                            float visible_bottom = (float)current_y + view_h - bottom_margin;
-
-                            if (node_y < visible_top)
+                            auto it = std::find(visible_diff_nodes.begin(), visible_diff_nodes.end(), selected_diff_node);
+                            if (it != visible_diff_nodes.end())
                             {
-                                float target = node_y - top_margin;
-                                if (target < 0.0f)
-                                    target = 0.0f;
-                                nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                int index = std::distance(visible_diff_nodes.begin(), it);
+                                nk_uint current_x, current_y;
+                                nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
+
+                                float row_height = 26.0f + ctx->style.window.spacing.y;
+                                float node_y = index * row_height;
+                                float view_h = nk_window_get_content_region(ctx).h;
+
+                                float top_margin = row_height * 2.0f;
+                                float bottom_margin = row_height * 2.0f;
+                                float visible_top = (float)current_y + top_margin;
+                                float visible_bottom = (float)current_y + view_h - bottom_margin;
+
+                                if (node_y < visible_top)
+                                {
+                                    float target = node_y - top_margin;
+                                    if (target < 0.0f) target = 0.0f;
+                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                }
+                                else if (node_y + row_height > visible_bottom)
+                                {
+                                    float target = node_y + row_height - view_h + bottom_margin;
+                                    if (target < 0.0f) target = 0.0f;
+                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                }
                             }
-                            else if (node_y + row_height > visible_bottom)
-                            {
-                                float target = node_y + row_height - view_h + bottom_margin;
-                                if (target < 0.0f)
-                                    target = 0.0f;
-                                nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
-                            }
+                            scroll_to_selected = false;
                         }
-                        scroll_to_selected = false;
+                    }
+                    else
+                    {
+                        draw_file_node(ctx, data_pack->GetFileTree());
+
+                        if (scroll_to_selected && selected_node)
+                        {
+                            auto it = std::find(visible_nodes.begin(), visible_nodes.end(), selected_node);
+                            if (it != visible_nodes.end())
+                            {
+                                int index = std::distance(visible_nodes.begin(), it);
+                                nk_uint current_x, current_y;
+                                nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
+
+                                float row_height = 26.0f + ctx->style.window.spacing.y;
+                                float node_y = index * row_height;
+                                float view_h = nk_window_get_content_region(ctx).h;
+
+                                float top_margin = row_height * 2.0f;
+                                float bottom_margin = row_height * 2.0f;
+                                float visible_top = (float)current_y + top_margin;
+                                float visible_bottom = (float)current_y + view_h - bottom_margin;
+
+                                if (node_y < visible_top)
+                                {
+                                    float target = node_y - top_margin;
+                                    if (target < 0.0f) target = 0.0f;
+                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                }
+                                else if (node_y + row_height > visible_bottom)
+                                {
+                                    float target = node_y + row_height - view_h + bottom_margin;
+                                    if (target < 0.0f) target = 0.0f;
+                                    nk_group_set_scroll(ctx, "FileTree", current_x, (nk_uint)target);
+                                }
+                            }
+                            scroll_to_selected = false;
+                        }
                     }
                 }
                 else if (data_pack && is_task_running)
@@ -2594,7 +3116,7 @@ int main(int argc, char *argv[])
                     expand_style.hover = nk_style_item_color(nk_rgb(60, 60, 65));
                     expand_style.text_normal = nk_rgb(150, 150, 150);
                     expand_style.rounding = 3.0f;
-                    
+
                     nk_widget_disable_begin(ctx);
                     nk_button_label_styled(ctx, &expand_style, "+");
                     nk_widget_disable_end(ctx);
@@ -3823,5 +4345,3 @@ int main(int argc, char *argv[])
     SDL_Quit();
     return 0;
 }
-
-
