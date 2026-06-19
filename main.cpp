@@ -83,6 +83,7 @@ struct PreviewState
     bool has_preview = false;
     std::string error, atlas_preview, atlas_full, json_preview;
     PreviewMode mode = PreviewMode::None;
+    const Core::FileNode* preview_node = nullptr;
 };
 
 struct AtlasViewerState
@@ -598,6 +599,7 @@ void load_image_preview(const Core::FileNode &node)
     g_state.database.column_names.clear();
     g_state.database.rows.clear();
     g_state.preview.mode = PreviewMode::None;
+    g_state.preview.preview_node = &node;
 
     try
     {
@@ -1129,6 +1131,7 @@ void handle_node_click(const Core::FileNode *node, bool is_folder)
             g_state.database.column_names.clear();
             g_state.database.rows.clear();
             g_state.preview.mode = PreviewMode::None;
+            g_state.preview.preview_node = nullptr;
         }
     }
     else
@@ -1151,6 +1154,7 @@ void handle_node_click(const Core::FileNode *node, bool is_folder)
             g_state.database.column_names.clear();
             g_state.database.rows.clear();
             g_state.preview.mode = PreviewMode::None;
+            g_state.preview.preview_node = nullptr;
         }
     }
 
@@ -1480,6 +1484,22 @@ std::string diff_display_name(const DiffNode &node)
     return diff_status_label(node.status) + node.name;
 }
 
+const Core::FileNode* find_file_node_by_path(const Core::FileNode& current, const std::string& path)
+{
+    if (current.full_path == path)
+        return &current;
+
+    if (std::holds_alternative<Core::FolderInfo>(current.data))
+    {
+        for (const auto& child : std::get<Core::FolderInfo>(current.data).children)
+        {
+            if (const Core::FileNode* found = find_file_node_by_path(child, path))
+                return found;
+        }
+    }
+    return nullptr;
+}
+
 void handle_diff_node_click(const DiffNode *node, bool is_folder)
 {
     bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
@@ -1503,12 +1523,78 @@ void handle_diff_node_click(const DiffNode *node, bool is_folder)
             g_state.diff.selected_nodes.insert(node);
         }
         g_state.diff.selected_node = node;
+        
+        if (!is_folder && g_state.browser.data_pack)
+        {
+            const Core::FileNode* file_node = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), node->full_path);
+            if (file_node)
+            {
+                load_image_preview(*file_node);
+            }
+            else
+            {
+                g_state.preview.has_preview = false;
+                g_state.preview.error = "File not found in current datapack (perhaps it was removed).";
+                g_state.preview.atlas_preview = "";
+                g_state.preview.json_preview = "";
+                g_state.preview.atlas_full = "";
+                g_state.database.column_names.clear();
+                g_state.database.rows.clear();
+                g_state.preview.mode = PreviewMode::None;
+                g_state.preview.preview_node = nullptr;
+            }
+        }
+        else if (is_folder)
+        {
+            g_state.preview.has_preview = false;
+            g_state.preview.error = "";
+            g_state.preview.atlas_preview = "";
+            g_state.preview.json_preview = "";
+            g_state.preview.atlas_full = "";
+            g_state.database.column_names.clear();
+            g_state.database.rows.clear();
+            g_state.preview.mode = PreviewMode::None;
+            g_state.preview.preview_node = nullptr;
+        }
     }
     else
     {
         g_state.diff.selected_nodes.clear();
         g_state.diff.selected_nodes.insert(node);
         g_state.diff.selected_node = node;
+
+        if (!is_folder && g_state.browser.data_pack)
+        {
+            const Core::FileNode* file_node = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), node->full_path);
+            if (file_node)
+            {
+                load_image_preview(*file_node);
+            }
+            else
+            {
+                g_state.preview.has_preview = false;
+                g_state.preview.error = "File not found in current datapack (perhaps it was removed).";
+                g_state.preview.atlas_preview = "";
+                g_state.preview.json_preview = "";
+                g_state.preview.atlas_full = "";
+                g_state.database.column_names.clear();
+                g_state.database.rows.clear();
+                g_state.preview.mode = PreviewMode::None;
+                g_state.preview.preview_node = nullptr;
+            }
+        }
+        else if (is_folder)
+        {
+            g_state.preview.has_preview = false;
+            g_state.preview.error = "";
+            g_state.preview.atlas_preview = "";
+            g_state.preview.json_preview = "";
+            g_state.preview.atlas_full = "";
+            g_state.database.column_names.clear();
+            g_state.database.rows.clear();
+            g_state.preview.mode = PreviewMode::None;
+            g_state.preview.preview_node = nullptr;
+        }
     }
 
     g_state.browser.last_click_time = current_time;
@@ -2674,9 +2760,9 @@ int main(int argc, char *argv[])
         {
             bool pack_loaded = (g_state.browser.data_pack != nullptr);
             bool tree_scanned = pack_loaded && g_state.tasks.scan_complete.load();
-            bool selection_exists = (g_state.browser.selected_node != nullptr);
-            bool has_file_selection = !g_state.browser.selected_nodes.empty();
-            bool has_extract_selection = has_file_selection || (g_state.browser.selected_node != nullptr);
+            bool selection_exists = g_state.diff.show_tree ? (g_state.diff.selected_node != nullptr) : (g_state.browser.selected_node != nullptr);
+            bool has_file_selection = g_state.diff.show_tree ? !g_state.diff.selected_nodes.empty() : !g_state.browser.selected_nodes.empty();
+            bool has_extract_selection = has_file_selection || selection_exists;
 
             nk_layout_row_dynamic(ctx, 38, g_state.common.enable_open_folder ? 10 : 9);
 
@@ -2926,7 +3012,7 @@ int main(int argc, char *argv[])
                 nk_widget_disable_end(ctx);
             }
 
-            if (tree_scanned && !g_state.spine.show_window && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, "Extract All"))
+            if (tree_scanned && !g_state.diff.show_tree && !g_state.spine.show_window && !g_state.tasks.running && nk_button_label_styled(ctx, &btn_style, "Extract All"))
             {
                 try
                 {
@@ -2953,7 +3039,7 @@ int main(int argc, char *argv[])
                     g_state.tasks.status = "Error starting extraction: " + std::string(e.what());
                 }
             }
-            else if (!tree_scanned || g_state.tasks.running || g_state.spine.show_window)
+            else if (!tree_scanned || g_state.diff.show_tree || g_state.tasks.running || g_state.spine.show_window)
             {
                 nk_widget_disable_begin(ctx);
                 nk_button_label_styled(ctx, &btn_style, "Extract All");
@@ -2973,15 +3059,35 @@ int main(int argc, char *argv[])
                         std::wstring dest_path(dest_str.begin(), dest_str.end());
                         g_state.tasks.running = true;
                         std::vector<const Core::FileNode *> nodes_to_extract;
-                        nodes_to_extract.reserve(g_state.browser.selected_nodes.size() + 1);
-                        for (const auto *n : g_state.browser.selected_nodes)
+                        if (g_state.diff.show_tree)
                         {
-                            if (n)
-                                nodes_to_extract.push_back(n);
+                            nodes_to_extract.reserve(g_state.diff.selected_nodes.size() + 1);
+                            for (const auto *n : g_state.diff.selected_nodes)
+                            {
+                                if (n)
+                                {
+                                    if (const Core::FileNode* fn = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), n->full_path))
+                                        nodes_to_extract.push_back(fn);
+                                }
+                            }
+                            if (nodes_to_extract.empty() && g_state.diff.selected_node)
+                            {
+                                if (const Core::FileNode* fn = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), g_state.diff.selected_node->full_path))
+                                    nodes_to_extract.push_back(fn);
+                            }
                         }
-                        if (nodes_to_extract.empty() && g_state.browser.selected_node)
+                        else
                         {
-                            nodes_to_extract.push_back(g_state.browser.selected_node);
+                            nodes_to_extract.reserve(g_state.browser.selected_nodes.size() + 1);
+                            for (const auto *n : g_state.browser.selected_nodes)
+                            {
+                                if (n)
+                                    nodes_to_extract.push_back(n);
+                            }
+                            if (nodes_to_extract.empty() && g_state.browser.selected_node)
+                            {
+                                nodes_to_extract.push_back(g_state.browser.selected_node);
+                            }
                         }
 
                         g_state.tasks.status = "Extracting " + std::to_string(nodes_to_extract.size()) + " item(s)...";
@@ -3247,9 +3353,9 @@ int main(int argc, char *argv[])
                         if (g_state.preview.mode == PreviewMode::Image)
                         {
                             nk_layout_row_dynamic(ctx, 30, 1);
-                            if (g_state.browser.selected_node)
+                            if (g_state.preview.preview_node)
                             {
-                                std::string title = "Preview: " + g_state.browser.selected_node->name;
+                                std::string title = "Preview: " + g_state.preview.preview_node->name;
                                 nk_label(ctx, title.c_str(), NK_TEXT_CENTERED);
                             }
 
@@ -3257,23 +3363,23 @@ int main(int argc, char *argv[])
                             std::string dims = std::to_string(g_state.preview.width) + " x " + std::to_string(g_state.preview.height);
                             nk_label_colored(ctx, dims.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
 
-                            if (g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
+                            if (g_state.preview.preview_node && std::holds_alternative<Core::FileInfo>(g_state.preview.preview_node->data))
                             {
-                                const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
+                                const auto &info = std::get<Core::FileInfo>(g_state.preview.preview_node->data);
                                 nk_layout_row_dynamic(ctx, 25, 1);
                                 std::string size_str = "Size: " + format_size(info.size);
                                 nk_label_colored(ctx, size_str.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
                             }
 
-                            if (g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
+                            if (g_state.preview.preview_node && std::holds_alternative<Core::FileInfo>(g_state.preview.preview_node->data))
                             {
-                                const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
+                                const auto &info = std::get<Core::FileInfo>(g_state.preview.preview_node->data);
                                 if (is_previewable_format(info.format))
                                 {
                                     nk_layout_row_dynamic(ctx, 30, 1);
                                     if (nk_button_label(ctx, "Open in Window"))
                                     {
-                                        open_image_preview_window(*g_state.browser.selected_node);
+                                        open_image_preview_window(*g_state.preview.preview_node);
                                     }
                                 }
                             }
@@ -3300,7 +3406,7 @@ int main(int argc, char *argv[])
                         }
                         else if (g_state.preview.mode == PreviewMode::DB)
                         {
-                            if (g_state.browser.selected_node)
+                            if (g_state.preview.preview_node)
                             {
                                 nk_layout_row_dynamic(ctx, 30, 1);
                                 std::string title = "Database Preview: " + g_state.database.filename;
@@ -3314,7 +3420,7 @@ int main(int argc, char *argv[])
                             nk_layout_row_dynamic(ctx, 30, 1);
                             if (nk_button_label(ctx, "Export as JSON"))
                             {
-                                export_db_as_json_file(*g_state.browser.selected_node);
+                                export_db_as_json_file(*g_state.preview.preview_node);
                             }
 
                             nk_layout_row_dynamic(ctx, 25, 1);
@@ -3434,16 +3540,16 @@ int main(int argc, char *argv[])
                             nk_layout_row_dynamic(ctx, 25, 1);
                             nk_label(ctx, "JSON Viewer", NK_TEXT_CENTERED);
 
-                            bool is_db_source = g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data) && is_db_file(std::get<Core::FileInfo>(g_state.browser.selected_node->data).format);
-                            bool is_scsp_source = g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data) && is_scsp_file(std::get<Core::FileInfo>(g_state.browser.selected_node->data).format);
-                            bool is_json_source = g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data) && is_json_file(std::get<Core::FileInfo>(g_state.browser.selected_node->data).format);
+                            bool is_db_source = g_state.preview.preview_node && std::holds_alternative<Core::FileInfo>(g_state.preview.preview_node->data) && is_db_file(std::get<Core::FileInfo>(g_state.preview.preview_node->data).format);
+                            bool is_scsp_source = g_state.preview.preview_node && std::holds_alternative<Core::FileInfo>(g_state.preview.preview_node->data) && is_scsp_file(std::get<Core::FileInfo>(g_state.preview.preview_node->data).format);
+                            bool is_json_source = g_state.preview.preview_node && std::holds_alternative<Core::FileInfo>(g_state.preview.preview_node->data) && is_json_file(std::get<Core::FileInfo>(g_state.preview.preview_node->data).format);
 
                             if (is_scsp_source)
                             {
                                 nk_layout_row_dynamic(ctx, 30, 1);
                                 if (nk_button_label(ctx, "Export as JSON"))
                                 {
-                                    export_scsp_as_json_file(*g_state.browser.selected_node);
+                                    export_scsp_as_json_file(*g_state.preview.preview_node);
                                 }
                             }
                             else
@@ -3457,11 +3563,11 @@ int main(int argc, char *argv[])
                                     {
                                         if (is_db_source)
                                         {
-                                            export_db_as_json_file(*g_state.browser.selected_node);
+                                            export_db_as_json_file(*g_state.preview.preview_node);
                                         }
                                         else
                                         {
-                                            export_json_file(*g_state.browser.selected_node);
+                                            export_json_file(*g_state.preview.preview_node);
                                         }
                                     }
                                 }
@@ -3481,7 +3587,7 @@ int main(int argc, char *argv[])
                                 {
                                     try
                                     {
-                                        std::string default_name = g_state.browser.selected_node ? g_state.browser.selected_node->name : "output";
+                                        std::string default_name = g_state.preview.preview_node ? g_state.preview.preview_node->name : "output";
                                         size_t dot_pos = default_name.find_last_of('.');
                                         if (dot_pos != std::string::npos)
                                         {
@@ -3549,7 +3655,7 @@ int main(int argc, char *argv[])
                             {
                                 try
                                 {
-                                    std::string default_name = g_state.browser.selected_node ? g_state.browser.selected_node->name : "output";
+                                    std::string default_name = g_state.preview.preview_node ? g_state.preview.preview_node->name : "output";
                                     size_t dot_pos = default_name.find_last_of('.');
                                     if (dot_pos != std::string::npos)
                                     {
