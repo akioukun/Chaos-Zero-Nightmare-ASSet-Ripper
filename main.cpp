@@ -28,15 +28,18 @@
 #include "nuklear_sdl_gl3.h"
 
 #include "portable-file-dialogs.h"
-#include "DataPack.h"
-#include "Core.h"
-#include "SCTParser.h"
-#include "DBParser.h"
-#include "SCSPParser.h"
-#include "SpineDictionary.h"
-#include "SpineRenderer.h"
-#include "Logger.h"
-#include "RipperOptions.h"
+#include "core/Core.h"
+#include "archive/DataPack.h"
+#include "archive/IArchive.h"
+#include "archive/CompositeArchive.h"
+#include "archive/SSRArchive.h"
+#include "parsers/SCTParser.h"
+#include "parsers/DBParser.h"
+#include "parsers/SCSPParser.h"
+#include "parsers/SpineDictionary.h"
+#include "parsers/SpineRenderer.h"
+#include "core/Logger.h"
+#include "core/RipperOptions.h"
 #include "json.hpp"
 
 #define INITIAL_WINDOW_WIDTH 1400
@@ -45,9 +48,35 @@
 
 using json = nlohmann::ordered_json;
 
+std::unique_ptr<IArchive> CreateArchive(const std::wstring& wpath) {
+    std::filesystem::path p(wpath);
+    if (p.filename() == L"manifest.ssra" || p.extension() == L".ssra") {
+        return std::make_unique<SSRArchive>(wpath);
+    }
+    std::filesystem::path dir = std::filesystem::is_directory(p) ? p : p.parent_path();
+    std::filesystem::path gameres_path = dir / L"gameres";
+    
+    if (std::filesystem::exists(gameres_path) && std::filesystem::is_directory(gameres_path)) {
+        auto composite = std::make_unique<CompositeArchive>(wpath);
+        composite->AddArchive(std::make_unique<DataPack>(wpath));
+        
+        try {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(gameres_path)) {
+                if (entry.is_regular_file() && entry.path().filename() == L"manifest.ssra") {
+                    composite->AddArchive(std::make_unique<SSRArchive>(entry.path().wstring()));
+                }
+            }
+        } catch (const std::exception& e) {
+            LogError("Error scanning gameres directory: " + std::string(e.what()));
+        }
+        return composite;
+    }
+    return std::make_unique<DataPack>(wpath);
+}
+
 struct FileBrowserState
 {
-    std::unique_ptr<DataPack> data_pack;
+    std::unique_ptr<IArchive> data_pack;
     const Core::FileNode *selected_node = nullptr;
     const Core::FileNode *last_clicked_node = nullptr;
     std::unordered_set<const Core::FileNode *> selected_nodes;
@@ -2779,8 +2808,8 @@ int main(int argc, char *argv[])
             {
                 try
                 {
-                    auto f = pfd::open_file("Select a data.pack file", ".",
-                                            {"Pack Files", "*.pack", "All Files", "*.*"});
+                    auto f = pfd::open_file("Select an archive or manifest file", ".",
+                                            {"Pack / Manifest Files", "*.pack;*.ssra", "All Files", "*.*"});
                     if (!f.result().empty())
                     {
                         std::string selected_path = f.result()[0];
@@ -2823,8 +2852,8 @@ int main(int argc, char *argv[])
                         g_state.diff.selected_nodes.clear();
                         g_state.diff.selected_node = nullptr;
 
-                        g_state.browser.data_pack = std::make_unique<DataPack>(wpath);
-                        if (g_state.browser.data_pack->GetType() == DataPack::PackType::Unknown)
+                        g_state.browser.data_pack = CreateArchive(wpath);
+                        if (g_state.browser.data_pack->GetType() == IArchive::PackType::Unknown)
                         {
                             g_state.tasks.status = "Error: Invalid or unknown file.";
                             g_state.browser.data_pack = nullptr;
@@ -2896,8 +2925,8 @@ int main(int argc, char *argv[])
                             g_state.diff.selected_nodes.clear();
                             g_state.diff.selected_node = nullptr;
 
-                            g_state.browser.data_pack = std::make_unique<DataPack>(wpath);
-                            if (g_state.browser.data_pack->GetType() == DataPack::PackType::Unknown)
+                            g_state.browser.data_pack = CreateArchive(wpath);
+                            if (g_state.browser.data_pack->GetType() == IArchive::PackType::Unknown)
                             {
                                 g_state.tasks.status = "Error: Invalid or unknown folder.";
                                 g_state.browser.data_pack = nullptr;
@@ -3020,7 +3049,7 @@ int main(int argc, char *argv[])
                     if (!d.result().empty())
                     {
                         std::string dest_str = d.result();
-                        std::wstring dest_path(dest_str.begin(), dest_str.end());
+                        std::wstring dest_path = Core::Utf8ToWString(dest_str);
                         g_state.tasks.running = true;
                         g_state.tasks.status = "Extracting all files...";
                         g_state.tasks.progress = 0.0f;
@@ -3056,7 +3085,7 @@ int main(int argc, char *argv[])
                     if (!d.result().empty())
                     {
                         std::string dest_str = d.result();
-                        std::wstring dest_path(dest_str.begin(), dest_str.end());
+                        std::wstring dest_path = Core::Utf8ToWString(dest_str);
                         g_state.tasks.running = true;
                         std::vector<const Core::FileNode *> nodes_to_extract;
                         if (g_state.diff.show_tree)
@@ -3147,7 +3176,7 @@ int main(int argc, char *argv[])
                 g_state.credits.show_window = true;
             }
 
-            float content_height = (float)window_height - 85;
+            float content_height = (float)window_height - 110;
 
             if (!g_state.spine.show_window)
             {
@@ -4667,18 +4696,38 @@ int main(int argc, char *argv[])
                 }
             } // end else (show_spine_viewer)
 
-            nk_layout_row_dynamic(ctx, 28, 1);
-            if (selection_exists)
+            nk_layout_row_dynamic(ctx, 4, 1);
+            nk_spacing(ctx, 1);
+
+            if (g_state.tasks.running)
             {
-                try
+                nk_layout_row_begin(ctx, NK_STATIC, 22, 2);
+                nk_layout_row_push(ctx, 220);
+                nk_size prog_val = static_cast<nk_size>(g_state.tasks.progress.load() * 1000.0f);
+                nk_progress(ctx, &prog_val, 1000, NK_FIXED);
+                nk_layout_row_push(ctx, (float)window_width - 260);
+                int percent = static_cast<int>(g_state.tasks.progress.load() * 100.0f);
+                std::string status_text = g_state.tasks.status + " (" + std::to_string(percent) + "%)";
+                nk_label_colored(ctx, status_text.c_str(), NK_TEXT_LEFT, nk_rgb(100, 200, 255));
+                nk_layout_row_end(ctx);
+            }
+            else
+            {
+                nk_layout_row_dynamic(ctx, 22, 1);
+                if (selection_exists && g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
                 {
-                    if (std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
-                    {
-                        const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
-                    }
+                    const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
+                    char off_buf[32];
+                    snprintf(off_buf, sizeof(off_buf), "0x%llX", (unsigned long long)info.offset);
+                    std::string details = "Selected: " + g_state.browser.selected_node->name +
+                                         " | Size: " + std::to_string(info.size) + " B" +
+                                         " | Offset: " + off_buf +
+                                         " | Format: " + info.format;
+                    nk_label_colored(ctx, details.c_str(), NK_TEXT_LEFT, nk_rgb(180, 180, 180));
                 }
-                catch (...)
+                else
                 {
+                    nk_label_colored(ctx, g_state.tasks.status.c_str(), NK_TEXT_LEFT, nk_rgb(160, 160, 160));
                 }
             }
         }

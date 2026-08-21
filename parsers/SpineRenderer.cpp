@@ -1,11 +1,11 @@
 #define NOMINMAX
 #include "SpineRenderer.h"
 #include "SpineDictionary.h"
-#include "DataPack.h"
+#include "archive/IArchive.h"
 #include "SCSPParser.h"
 #include "SCTParser.h"
 
-#include "Logger.h"
+#include "core/Logger.h"
 #include "json.hpp"
 
 #include <SDL.h>
@@ -295,7 +295,7 @@ GLuint SpineViewer::loadTextureFromRGBA(const unsigned char* data, int width, in
     return tex;
 }
 
-bool SpineViewer::loadSkeleton(const SpineDictionary& dict, DataPack& pack, const SpineEntry& entry) {
+bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, const SpineEntry& entry) {
     unload();
     batchRenderer.init();
 

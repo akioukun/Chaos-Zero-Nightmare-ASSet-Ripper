@@ -1,7 +1,7 @@
 #include "SpineDictionary.h"
-#include "DataPack.h"
+#include "archive/IArchive.h"
 #include "SCSPParser.h"
-#include "Logger.h"
+#include "core/Logger.h"
 #include <algorithm>
 #include <sstream>
 #include <set>
@@ -167,7 +167,7 @@ std::vector<std::string> SpineDictionary::ParseAtlasTextureNames(const std::vect
     return textures;
 }
 
-void SpineDictionary::MatchEntries(DataPack& pack) {
+void SpineDictionary::MatchEntries(IArchive& pack) {
     int skipped_no_atlas = 0;
 
     std::unordered_map<std::string, std::vector<const Core::FileNode*>> atlases_by_dir;
@@ -223,7 +223,7 @@ void SpineDictionary::MatchEntries(DataPack& pack) {
         });
 }
 
-void SpineDictionary::EnsureDetailsLoaded(DataPack& pack, const SpineEntry& entry) const {
+void SpineDictionary::EnsureDetailsLoaded(IArchive& pack, const SpineEntry& entry) const {
     if (entry.details_loaded) return;
     entry.details_loaded = true;
 
@@ -298,7 +298,7 @@ void SpineDictionary::BuildCategories() {
     }
 }
 
-void SpineDictionary::Build(DataPack& pack, const Core::FileNode& root) {
+void SpineDictionary::Build(IArchive& pack, const Core::FileNode& root) {
     Clear();
     LogInfo("SpineDictionary: scanning file tree...");
     CollectFiles(root);

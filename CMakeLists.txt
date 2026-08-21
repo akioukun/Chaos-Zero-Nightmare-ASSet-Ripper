@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ChaosZeroNightmareRipper LANGUAGES CXX)
+project(ChaosZeroNightmareRipper LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,12 +24,16 @@ file(GLOB SPINE_CPP_SOURCES "libs/spine-cpp/src/spine/*.cpp")
 add_executable(
     ${PROJECT_NAME}
     main.cpp
-    DataPack.cpp
-    SCTParser.cpp
-    DBParser.cpp
-    SCSPParser.cpp
-    SpineDictionary.cpp
-    SpineRenderer.cpp
+    archive/DataPack.cpp
+    archive/ArchiveBase.cpp
+    archive/SSRArchive.cpp
+    archive/CompositeArchive.cpp
+    parsers/SCTParser.cpp
+    parsers/DBParser.cpp
+    parsers/SCSPParser.cpp
+    parsers/SpineDictionary.cpp
+    parsers/SpineRenderer.cpp
+    libs/zstd/zstddeclib.c
     ${SPINE_CPP_SOURCES}
 )
 
@@ -39,7 +43,12 @@ endif()
 target_include_directories(
     ${PROJECT_NAME}
     PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/core"
+    "${CMAKE_CURRENT_SOURCE_DIR}/archive"
+    "${CMAKE_CURRENT_SOURCE_DIR}/parsers"
     "${CMAKE_CURRENT_SOURCE_DIR}/libs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/libs/zstd"
     "${CMAKE_CURRENT_SOURCE_DIR}/libs/spine-cpp/include"
     ${SDL2_INCLUDE_DIRS}
     ${GLEW_INCLUDE_DIRS}

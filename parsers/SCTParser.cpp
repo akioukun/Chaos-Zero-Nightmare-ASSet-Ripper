@@ -3,7 +3,7 @@
 #include <cstring>
 #include <algorithm>
 #include <stdexcept>
-#include "Logger.h"
+#include "core/Logger.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"

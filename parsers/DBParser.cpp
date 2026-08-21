@@ -5,7 +5,7 @@
 #include <sstream>
 #include <iomanip>
 #include <map>
-#include "Logger.h"
+#include "core/Logger.h"
 #include "json.hpp"
 
 namespace DBParser

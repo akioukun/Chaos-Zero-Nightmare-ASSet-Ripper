@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "SCSPParser.h"
 
-class DataPack;
+class IArchive;
 
 struct SpineEntry {
     std::string name;                    // raw .scsp filename minus extension
@@ -31,9 +31,9 @@ struct SpineCategory {
 
 class SpineDictionary {
 public:
-    void Build(DataPack& pack, const Core::FileNode& root);
+    void Build(IArchive& pack, const Core::FileNode& root);
     void Clear();
-    void EnsureDetailsLoaded(DataPack& pack, const SpineEntry& entry) const;
+    void EnsureDetailsLoaded(IArchive& pack, const SpineEntry& entry) const;
 
     const std::vector<SpineEntry>& GetEntries() const { return entries; }
     const SpineCategory& GetRootCategory() const { return root_category; }
@@ -41,7 +41,7 @@ public:
 
 private:
     void CollectFiles(const Core::FileNode& node);
-    void MatchEntries(DataPack& pack);
+    void MatchEntries(IArchive& pack);
     void BuildCategories();
     std::vector<std::string> ParseAtlasTextureNames(const std::vector<uint8_t>& atlas_data) const;
     const Core::FileNode* FindSiblingByName(const std::string& scsp_path, const std::string& filename);

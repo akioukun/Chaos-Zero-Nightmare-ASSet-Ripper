@@ -8,7 +8,7 @@
 #include <vector>
 #include <memory>
 
-class DataPack;
+class IArchive;
 struct SpineEntry;
 class SpineDictionary;
 
@@ -75,7 +75,7 @@ public:
     SpineViewer();
     ~SpineViewer();
 
-    bool loadSkeleton(const SpineDictionary& dict, DataPack& pack, const SpineEntry& entry);
+    bool loadSkeleton(const SpineDictionary& dict, IArchive& pack, const SpineEntry& entry);
     void unload();
     void update(float deltaTime);
     void render(int viewportWidth, int viewportHeight);

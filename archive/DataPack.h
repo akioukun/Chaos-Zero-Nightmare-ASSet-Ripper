@@ -1,30 +1,21 @@
 #pragma once
-#include "Core.h"
+#include "core/Core.h"
 #include <string>
 #include <vector>
 #include <functional>
 #include <atomic>
 #include <windows.h>
+#include "ArchiveBase.h"
 
-class DataPack {
+class DataPack : public ArchiveBase {
 public:
-    enum class PackType { Unknown, Encrypted, Decrypted, LocalDirectory };
-
     DataPack(const std::wstring& path);
-    ~DataPack();
+    ~DataPack() override;
     DataPack(const DataPack&) = delete;
     DataPack& operator=(const DataPack&) = delete;
 
-    PackType GetType() const { return type; }
-    const Core::FileNode& GetFileTree() const { return root_node; }
-    std::wstring GetPackPath() const { return pack_path; }
-    uint32_t GetParsedFileCount() const { return parsed_file_count.load(); }
-    uint64_t GetParsedTotalSize() const { return parsed_total_size.load(); }
-
-    void Scan(std::atomic<float>& progress);
-    void Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false, bool convert_db_to_json = false);
-    void ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false, bool convert_db_to_json = false);
-    std::vector<uint8_t> GetFileData(const Core::FileNode& node);
+    void Scan(std::atomic<float>& progress) override;
+    std::vector<uint8_t> GetFileData(const Core::FileNode& node) override;
 
 private:
     // this maps only a portion of file at a time.
@@ -50,8 +41,6 @@ private:
     void ScanEncrypted(std::atomic<float>& progress);
     void ScanDecrypted(std::atomic<float>& progress);
     void ScanLocalDirectory(std::atomic<float>& progress);
-    void AddFileToTree(const std::string& path, uint64_t offset, uint64_t size);  
-    void ExtractNode(const Core::FileNode& node, const std::wstring& current_path, std::atomic<uint64_t>& extracted_size, const uint64_t total_size, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json);
     
     std::vector<std::wstring> FindPackParts(const std::wstring& basePath);
     bool LoadPackPart(const std::wstring& path, size_t partIndex);
@@ -60,12 +49,6 @@ private:
     const uint8_t* GetDataAtOffset(uint64_t offset, size_t& outSize);
     size_t ReadBytes(uint64_t offset, void* dest, size_t count);
 
-    std::wstring pack_path;
-    std::atomic<uint32_t> parsed_file_count{0};
-    std::atomic<uint64_t> parsed_total_size{0};
-
     std::vector<PackPart> parts;
     uint64_t total_file_size = 0;
-    PackType type;
-    Core::FileNode root_node;
 };
