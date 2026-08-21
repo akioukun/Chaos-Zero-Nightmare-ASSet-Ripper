@@ -19,6 +19,8 @@ And export either all files or only selected files and folders, depending on you
 ## How to use
 1) Click `Open Pack` and select `data.pack` located under: `WhereYouInstalledTheGame\ChaosZeroNightmare\bin\appdata\cznlive`
 2) Click `Scan Tree` which will scan the files and build game resources file tree
+### Important Note for the Chinese Version
+The tool also suport the chinese version of the game (卡厄思梦境). But for having the tool properly scanning each `manifest.ssra`, you need to have AT LEAST launched the game once, so that the client have generated a `data.pack` which you will select, as explained in [How to use](#how-to-use)
    
 ## Navigating the File Tree and Exporting
 You can navigate the file tree using either mouse or keyboard input.
