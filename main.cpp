@@ -3466,7 +3466,7 @@ int main(int argc, char *argv[])
                             float preview_table_height = content_height - 230;
                             nk_layout_row_dynamic(ctx, preview_table_height, 1);
 
-                            if (nk_group_begin(ctx, "DBPreviewTable", NK_WINDOW_BORDER))
+                            if (nk_group_begin(ctx, (std::string("DBPreviewTable_") + g_state.database.filename).c_str(), NK_WINDOW_BORDER))
                             {
                                 float base_width = 100.0f;
                                 std::vector<float> col_widths(g_state.database.column_names.size(), base_width);
@@ -3646,7 +3646,9 @@ int main(int argc, char *argv[])
                             }
 
                             nk_layout_row_dynamic(ctx, content_height - 130, 1);
-                            if (nk_group_begin(ctx, "JsonPreview", NK_WINDOW_BORDER))
+                            std::string group_id = "JsonPreview";
+                            if (g_state.preview.preview_node) group_id += "_" + g_state.preview.preview_node->name;
+                            if (nk_group_begin(ctx, group_id.c_str(), NK_WINDOW_BORDER))
                             {
                                 std::stringstream ss(g_state.preview.json_preview);
                                 std::string line;
@@ -3735,7 +3737,9 @@ int main(int argc, char *argv[])
                             nk_layout_row_end(ctx);
 
                             nk_layout_row_dynamic(ctx, content_height - 130, 1);
-                            if (nk_group_begin(ctx, "TextPreview", NK_WINDOW_BORDER))
+                            std::string group_id = "TextPreview";
+                            if (g_state.preview.preview_node) group_id += "_" + g_state.preview.preview_node->name;
+                            if (nk_group_begin(ctx, group_id.c_str(), NK_WINDOW_BORDER))
                             {
                                 std::stringstream ss(g_state.preview.atlas_preview);
                                 std::string line;
