@@ -3346,8 +3346,9 @@ int main(int argc, char *argv[])
 
                     bool hovering_splitter = nk_input_is_mouse_hovering_rect(in, bounds);
                     bool mouse_down = nk_input_is_mouse_down(in, NK_BUTTON_LEFT);
+                    bool mouse_clicked_on_splitter = nk_input_has_mouse_click_down_in_rect(in, NK_BUTTON_LEFT, bounds, nk_true);
 
-                    if (hovering_splitter && mouse_down && !dragging_splitter)
+                    if (mouse_clicked_on_splitter)
                     {
                         dragging_splitter = true;
                     }
