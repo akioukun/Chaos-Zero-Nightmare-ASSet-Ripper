@@ -232,6 +232,7 @@ void SSRArchive::Scan(std::atomic<float>& progress)
             progress = static_cast<float>(i + 1) / header.file_count;
         }
     }
+    SortTree();
     progress = 1.0f;
 }
 

@@ -425,6 +425,7 @@ void DataPack::Scan(std::atomic<float> &progress)
         LogError("Error during scan: " + std::filesystem::path(e.what()).u8string());
     }
 
+    SortTree();
     progress = 1.0f;
 }
 

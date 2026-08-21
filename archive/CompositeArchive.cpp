@@ -56,6 +56,7 @@ void CompositeArchive::Scan(std::atomic<float>& progress)
         merge_func(archives[i]->GetFileTree());
         progress = (i + 1) * weight;
     }
+    SortTree();
     progress = 1.0f;
 }
 

@@ -22,6 +22,7 @@ public:
     virtual std::vector<uint8_t> GetFileData(const Core::FileNode& node) override = 0;
 
 protected:
+    void SortTree();
     void AddFileToTree(const std::string& path, uint64_t offset, uint64_t size, uint32_t archive_id = 0);
     void ExtractNode(const Core::FileNode& node, const std::wstring& current_path, std::atomic<uint64_t>& extracted_size, const uint64_t total_size, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json);
 

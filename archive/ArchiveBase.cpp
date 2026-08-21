@@ -132,6 +132,27 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
     }
 }
 
+void ArchiveBase::SortTree()
+{
+    std::function<void(Core::FileNode&)> sort_node = [&](Core::FileNode& node) {
+        if (std::holds_alternative<Core::FolderInfo>(node.data)) {
+            auto& folder = std::get<Core::FolderInfo>(node.data);
+            std::sort(folder.children.begin(), folder.children.end(), [](const Core::FileNode& a, const Core::FileNode& b) {
+                bool a_is_folder = std::holds_alternative<Core::FolderInfo>(a.data);
+                bool b_is_folder = std::holds_alternative<Core::FolderInfo>(b.data);
+                if (a_is_folder != b_is_folder) {
+                    return a_is_folder > b_is_folder; // True (1) > False (0), so folders first
+                }
+                return a.name < b.name;
+            });
+            for (auto& child : folder.children) {
+                sort_node(child);
+            }
+        }
+    };
+    sort_node(root_node);
+}
+
 void ArchiveBase::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json)
 {
     LogInfo("ExtractAll started");
