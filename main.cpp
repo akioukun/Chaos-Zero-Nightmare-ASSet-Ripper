@@ -3176,7 +3176,9 @@ int main(int argc, char *argv[])
                 g_state.credits.show_window = true;
             }
 
-            float content_height = (float)window_height - 110;
+            // Reserve room for the toolbar, search bar, spacer and the status / progress bar at the bottom.
+            // Nuklear adds style.window.spacing.y to every row and nk_spacing() allocates a whole extra row.
+            float content_height = (float)window_height - 130;
 
             if (!g_state.spine.show_window)
             {
