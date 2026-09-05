@@ -100,6 +100,19 @@ namespace DialogPaths
         }
 
         /**
+         * Picks the options for a folder dialog. Without `force_path` portable-file-dialogs calls `IFileDialog::SetDefaultFolder`, which Windows ignores
+         * whenever the shell has a most-recently-visited folder for this app, so opening a pack would leave every later folder dialog on the input path.
+         * Forcing is only right when there is a folder to force. With nothing remembered, the shell's own guess beats the working directory.
+         *
+         * @param rememberedDir The folder to start in, or an empty string when nothing is remembered.
+         * @returns The options to hand the dialog.
+         */
+        inline pfd::opt folderOptions(const std::string &rememberedDir)
+        {
+            return rememberedDir.empty() ? pfd::opt::none : pfd::opt::force_path;
+        }
+
+        /**
          * Stores a directory for a slot and writes it to the ini. The ini is read back first so this keeps whatever another part of the app has saved
          * since the process started.
          *
@@ -191,7 +204,8 @@ namespace DialogPaths
      */
     inline std::string SelectFolder(Slot slot, const std::string &title)
     {
-        pfd::select_folder dialog(title, Internal::startDir(slot));
+        const std::string remembered = Internal::rememberedDir(slot);
+        pfd::select_folder dialog(title, remembered.empty() ? "." : remembered, Internal::folderOptions(remembered));
         const std::string picked = dialog.result();
         Internal::rememberDir(slot, picked);
         return picked;
