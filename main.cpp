@@ -27,7 +27,6 @@
 #include "nuklear.h"
 #include "nuklear_sdl_gl3.h"
 
-#include "portable-file-dialogs.h"
 #include "core/Core.h"
 #include "archive/DataPack.h"
 #include "archive/IArchive.h"
@@ -40,6 +39,7 @@
 #include "parsers/SpineRenderer.h"
 #include "core/Logger.h"
 #include "core/RipperOptions.h"
+#include "core/DialogPaths.h"
 #include "json.hpp"
 
 #define INITIAL_WINDOW_WIDTH 1400
@@ -240,7 +240,8 @@ static AppState g_state;
 
 static void save_options_to_ini()
 {
-    RipperOptions &options = CurrentRipperOptions();
+    // Load first so the remembered dialog folders are carried through instead of reset.
+    RipperOptions options = LoadRipperOptions();
     options.exportSctAsPng = (g_state.common.export_sct_as_png != nk_false);
     options.exportDbAsJson = (g_state.common.export_db_as_json != nk_false);
     options.enableOpenFolder = (g_state.common.enable_open_folder != nk_false);
@@ -249,7 +250,7 @@ static void save_options_to_ini()
 
 static void load_options_from_ini()
 {
-    const RipperOptions &options = CurrentRipperOptions();
+    const RipperOptions options = LoadRipperOptions();
     g_state.common.export_sct_as_png = options.exportSctAsPng ? nk_true : nk_false;
     g_state.common.export_db_as_json = options.exportDbAsJson ? nk_true : nk_false;
     g_state.common.enable_open_folder = options.enableOpenFolder ? nk_true : nk_false;
@@ -794,12 +795,10 @@ void export_db_as_json_file(const Core::FileNode &node)
         }
         default_name += ".json";
 
-        auto f = pfd::save_file("Export DB as JSON", DialogPaths::StartPath(DialogPaths::Slot::Export, default_name),
-                                {"JSON Files", "*.json", "All Files", "*.*"});
+        const std::string save_path = DialogPaths::SaveFile("Export DB as JSON", default_name, {"JSON Files", "*.json", "All Files", "*.*"});
 
-        if (!f.result().empty())
+        if (!save_path.empty())
         {
-            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
             std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::string json_str = DBParser::ConvertToJson(file_data);
 
@@ -811,18 +810,18 @@ void export_db_as_json_file(const Core::FileNode &node)
                     json parsed = json::parse(json_str);
                     std::string formatted_json = parsed.dump(2);
 
-                    std::ofstream out(f.result());
+                    std::ofstream out(save_path);
                     out << formatted_json;
                     out.close();
-                    g_state.tasks.status = "Exported DB to JSON: " + f.result();
+                    g_state.tasks.status = "Exported DB to JSON: " + save_path;
                 }
                 catch (const json::parse_error &e)
                 {
                     // Se il parsing fallisce, scrivi il JSON raw
-                    std::ofstream out(f.result());
+                    std::ofstream out(save_path);
                     out << json_str;
                     out.close();
-                    g_state.tasks.status = "Exported DB to JSON (unformatted): " + f.result();
+                    g_state.tasks.status = "Exported DB to JSON (unformatted): " + save_path;
                 }
             }
             else
@@ -849,12 +848,10 @@ void export_scsp_as_json_file(const Core::FileNode &node)
         }
         default_name += ".json";
 
-        auto f = pfd::save_file("Export SCSP as JSON", DialogPaths::StartPath(DialogPaths::Slot::Export, default_name),
-                                {"JSON Files", "*.json", "All Files", "*.*"});
+        const std::string save_path = DialogPaths::SaveFile("Export SCSP as JSON", default_name, {"JSON Files", "*.json", "All Files", "*.*"});
 
-        if (!f.result().empty())
+        if (!save_path.empty())
         {
-            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
             std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::string json_str = SCSPParser::ConvertSCSPToJson(file_data);
 
@@ -865,17 +862,17 @@ void export_scsp_as_json_file(const Core::FileNode &node)
                     json parsed = json::parse(json_str);
                     std::string formatted_json = parsed.dump(2);
 
-                    std::ofstream out(f.result());
+                    std::ofstream out(save_path);
                     out << formatted_json;
                     out.close();
-                    g_state.tasks.status = "Exported SCSP to JSON: " + f.result();
+                    g_state.tasks.status = "Exported SCSP to JSON: " + save_path;
                 }
                 catch (const json::parse_error &e)
                 {
-                    std::ofstream out(f.result());
+                    std::ofstream out(save_path);
                     out << json_str;
                     out.close();
-                    g_state.tasks.status = "Exported SCSP to JSON (unformatted): " + f.result();
+                    g_state.tasks.status = "Exported SCSP to JSON (unformatted): " + save_path;
                 }
             }
             else
@@ -902,12 +899,10 @@ void export_json_file(const Core::FileNode &node)
         }
         default_name += ".json";
 
-        auto f = pfd::save_file("Export JSON", DialogPaths::StartPath(DialogPaths::Slot::Export, default_name),
-                                {"JSON Files", "*.json", "All Files", "*.*"});
+        const std::string save_path = DialogPaths::SaveFile("Export JSON", default_name, {"JSON Files", "*.json", "All Files", "*.*"});
 
-        if (!f.result().empty())
+        if (!save_path.empty())
         {
-            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
             std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             if (file_data.empty())
             {
@@ -915,10 +910,10 @@ void export_json_file(const Core::FileNode &node)
                 return;
             }
 
-            std::ofstream out(f.result(), std::ios::binary);
+            std::ofstream out(save_path, std::ios::binary);
             out.write(reinterpret_cast<const char *>(file_data.data()), file_data.size());
             out.close();
-            g_state.tasks.status = "Exported JSON: " + f.result();
+            g_state.tasks.status = "Exported JSON: " + save_path;
         }
     }
     catch (const std::exception &e)
@@ -1069,12 +1064,10 @@ void export_file_as_png(const Core::FileNode &node)
         }
         default_name += ".png";
 
-        auto f = pfd::save_file("Export as PNG", DialogPaths::StartPath(DialogPaths::Slot::Export, default_name),
-                                {"PNG Files", "*.png", "All Files", "*.*"});
+        const std::string save_path = DialogPaths::SaveFile("Export as PNG", default_name, {"PNG Files", "*.png", "All Files", "*.*"});
 
-        if (!f.result().empty())
+        if (!save_path.empty())
         {
-            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
             std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
             std::vector<uint8_t> png_data;
 
@@ -1089,10 +1082,10 @@ void export_file_as_png(const Core::FileNode &node)
 
             if (!png_data.empty())
             {
-                std::ofstream out(f.result(), std::ios::binary);
+                std::ofstream out(save_path, std::ios::binary);
                 out.write((const char *)png_data.data(), png_data.size());
                 out.close();
-                g_state.tasks.status = "Exported to: " + f.result();
+                g_state.tasks.status = "Exported to: " + save_path;
             }
         }
     }
@@ -1106,17 +1099,15 @@ void export_file_as_sct(const Core::FileNode &node)
 {
     try
     {
-        auto f = pfd::save_file("Export as SCT", DialogPaths::StartPath(DialogPaths::Slot::Export, node.name),
-                                {"SCT Files", "*.sct;*.sct2", "All Files", "*.*"});
+        const std::string save_path = DialogPaths::SaveFile("Export as SCT", node.name, {"SCT Files", "*.sct;*.sct2", "All Files", "*.*"});
 
-        if (!f.result().empty())
+        if (!save_path.empty())
         {
-            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
             std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-            std::ofstream out(f.result(), std::ios::binary);
+            std::ofstream out(save_path, std::ios::binary);
             out.write((const char *)file_data.data(), file_data.size());
             out.close();
-            g_state.tasks.status = "Exported to: " + f.result();
+            g_state.tasks.status = "Exported to: " + save_path;
         }
     }
     catch (const std::exception &e)
@@ -1235,13 +1226,11 @@ void export_to_json()
 {
     try
     {
-        auto f = pfd::save_file("Export File Map", DialogPaths::StartPath(DialogPaths::Slot::Export, "filemap.json"),
-                                {"JSON Files", "*.json", "All Files", "*.*"});
+        const std::string save_path = DialogPaths::SaveFile("Export File Map", "filemap.json", {"JSON Files", "*.json", "All Files", "*.*"});
 
-        if (!f.result().empty())
+        if (!save_path.empty())
         {
-            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
-            std::ofstream out(f.result());
+            std::ofstream out(save_path);
             if (out.is_open())
             {
                 nlohmann::ordered_json j = build_file_tree_json(g_state.browser.data_pack->GetFileTree());
@@ -1249,7 +1238,7 @@ void export_to_json()
                 out.close();
                 g_state.common.success_message = "File map exported successfully!";
                 g_state.common.show_success_popup = true;
-                g_state.tasks.status = "Exported to: " + f.result();
+                g_state.tasks.status = "Exported to: " + save_path;
             }
         }
     }
@@ -1456,15 +1445,13 @@ bool load_diff_tree_from_filemap()
 {
     try
     {
-        auto f = pfd::open_file("Select an older filemap.json", DialogPaths::StartDir(DialogPaths::Slot::Export), {"JSON Files", "*.json", "All Files", "*.*"});
-        if (f.result().empty())
+        const std::string picked_path = DialogPaths::OpenFile(DialogPaths::Slot::Export, "Select an older filemap.json", {"JSON Files", "*.json", "All Files", "*.*"});
+        if (picked_path.empty())
         {
             return false;
         }
 
-        DialogPaths::Remember(DialogPaths::Slot::Export, f.result()[0], false);
-
-        std::ifstream in(f.result()[0]);
+        std::ifstream in(picked_path);
         if (!in.is_open())
         {
             g_state.tasks.status = "Error opening filemap.json for diff.";
@@ -2517,15 +2504,14 @@ int main(int argc, char *argv[])
                     {
                         try
                         {
-                            auto f = pfd::save_file("Extract File", DialogPaths::StartPath(DialogPaths::Slot::Export, g_state.context_menu.node->name), {"All Files", "*.*"});
-                            if (!f.result().empty())
+                            const std::string save_path = DialogPaths::SaveFile("Extract File", g_state.context_menu.node->name, {"All Files", "*.*"});
+                            if (!save_path.empty())
                             {
-                                DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
                                 std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(*g_state.context_menu.node);
-                                std::ofstream out(f.result(), std::ios::binary);
+                                std::ofstream out(save_path, std::ios::binary);
                                 out.write((const char *)file_data.data(), file_data.size());
                                 out.close();
-                                g_state.tasks.status = "Extracted to: " + f.result();
+                                g_state.tasks.status = "Extracted to: " + save_path;
                             }
                         }
                         catch (...)
@@ -2763,11 +2749,10 @@ int main(int argc, char *argv[])
                 {
                     try
                     {
-                        auto f = pfd::save_file("Save Atlas Text", DialogPaths::StartPath(DialogPaths::Slot::Export, "atlas.txt"), {"Text", "*.txt", "All Files", "*.*"});
-                        if (!f.result().empty())
+                        const std::string save_path = DialogPaths::SaveFile("Save Atlas Text", "atlas.txt", {"Text", "*.txt", "All Files", "*.*"});
+                        if (!save_path.empty())
                         {
-                            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
-                            std::ofstream out(f.result());
+                            std::ofstream out(save_path);
                             if (out.is_open())
                             {
                                 out << g_state.preview.atlas_full;
@@ -2818,12 +2803,10 @@ int main(int argc, char *argv[])
             {
                 try
                 {
-                    auto f = pfd::open_file("Select an archive or manifest file", DialogPaths::StartDir(DialogPaths::Slot::Open),
-                                            {"Pack / Manifest Files", "*.pack;*.ssra", "All Files", "*.*"});
-                    if (!f.result().empty())
+                    const std::string selected_path = DialogPaths::OpenFile(DialogPaths::Slot::Open, "Select an archive or manifest file",
+                                                                            {"Pack / Manifest Files", "*.pack;*.ssra", "All Files", "*.*"});
+                    if (!selected_path.empty())
                     {
-                        std::string selected_path = f.result()[0];
-                        DialogPaths::Remember(DialogPaths::Slot::Open, selected_path, false);
                         int size_needed = MultiByteToWideChar(CP_UTF8, 0, selected_path.c_str(),
                                                               (int)selected_path.size(), NULL, 0);
                         std::wstring wpath(size_needed, 0);
@@ -2893,11 +2876,9 @@ int main(int argc, char *argv[])
                 {
                     try
                     {
-                        auto f = pfd::select_folder("Select a folder to view", DialogPaths::StartDir(DialogPaths::Slot::Open));
-                        if (!f.result().empty())
+                        const std::string selected_path = DialogPaths::SelectFolder(DialogPaths::Slot::Open, "Select a folder to view");
+                        if (!selected_path.empty())
                         {
-                            std::string selected_path = f.result();
-                            DialogPaths::Remember(DialogPaths::Slot::Open, selected_path, true);
                             int size_needed = MultiByteToWideChar(CP_UTF8, 0, selected_path.c_str(),
                                                                   (int)selected_path.size(), NULL, 0);
                             std::wstring wpath(size_needed, 0);
@@ -3057,11 +3038,9 @@ int main(int argc, char *argv[])
             {
                 try
                 {
-                    auto d = pfd::select_folder("Select destination folder", DialogPaths::StartDir(DialogPaths::Slot::Extract));
-                    if (!d.result().empty())
+                    const std::string dest_str = DialogPaths::SelectFolder(DialogPaths::Slot::Extract, "Select destination folder");
+                    if (!dest_str.empty())
                     {
-                        std::string dest_str = d.result();
-                        DialogPaths::Remember(DialogPaths::Slot::Extract, dest_str, true);
                         std::wstring dest_path = Core::Utf8ToWString(dest_str);
                         g_state.tasks.running = true;
                         g_state.tasks.status = "Extracting all files...";
@@ -3094,11 +3073,9 @@ int main(int argc, char *argv[])
 
                 try
                 {
-                    auto d = pfd::select_folder("Select destination folder", DialogPaths::StartDir(DialogPaths::Slot::Extract));
-                    if (!d.result().empty())
+                    const std::string dest_str = DialogPaths::SelectFolder(DialogPaths::Slot::Extract, "Select destination folder");
+                    if (!dest_str.empty())
                     {
-                        std::string dest_str = d.result();
-                        DialogPaths::Remember(DialogPaths::Slot::Extract, dest_str, true);
                         std::wstring dest_path = Core::Utf8ToWString(dest_str);
                         g_state.tasks.running = true;
                         std::vector<const Core::FileNode *> nodes_to_extract;
@@ -3641,18 +3618,16 @@ int main(int argc, char *argv[])
                                         }
                                         default_name += ".json";
 
-                                        auto f = pfd::save_file("Save JSON", DialogPaths::StartPath(DialogPaths::Slot::Export, default_name),
-                                                                {"JSON Files", "*.json", "All Files", "*.*"});
+                                        const std::string save_path = DialogPaths::SaveFile("Save JSON", default_name, {"JSON Files", "*.json", "All Files", "*.*"});
 
-                                        if (!f.result().empty())
+                                        if (!save_path.empty())
                                         {
-                                            DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
-                                            std::ofstream out(f.result());
+                                            std::ofstream out(save_path);
                                             if (out.is_open())
                                             {
                                                 out << g_state.preview.json_preview;
                                                 out.close();
-                                                g_state.tasks.status = "Saved to: " + f.result();
+                                                g_state.tasks.status = "Saved to: " + save_path;
                                             }
                                         }
                                     }
@@ -3733,19 +3708,18 @@ int main(int argc, char *argv[])
                                         default_name += ".txt";
                                     }
 
-                                    auto f = pfd::save_file(is_atlas ? "Save Atlas" : "Save Text", DialogPaths::StartPath(DialogPaths::Slot::Export, default_name),
-                                                            is_atlas ? std::vector<std::string>{"Atlas Files", "*.atlas", "Text Files", "*.txt", "All Files", "*.*"}
-                                                                     : std::vector<std::string>{"Text Files", "*.txt", "All Files", "*.*"});
+                                    const std::string save_path = DialogPaths::SaveFile(is_atlas ? "Save Atlas" : "Save Text", default_name,
+                                                                                        is_atlas ? std::vector<std::string>{"Atlas Files", "*.atlas", "Text Files", "*.txt", "All Files", "*.*"}
+                                                                                                 : std::vector<std::string>{"Text Files", "*.txt", "All Files", "*.*"});
 
-                                    if (!f.result().empty())
+                                    if (!save_path.empty())
                                     {
-                                        DialogPaths::Remember(DialogPaths::Slot::Export, f.result(), false);
-                                        std::ofstream out(f.result(), std::ios::binary);
+                                        std::ofstream out(save_path, std::ios::binary);
                                         if (out.is_open())
                                         {
                                             out << data_to_save;
                                             out.close();
-                                            g_state.tasks.status = "Saved to: " + f.result();
+                                            g_state.tasks.status = "Saved to: " + save_path;
                                         }
                                     }
                                 }
@@ -4035,11 +4009,9 @@ int main(int argc, char *argv[])
                                     const auto &entry = spine_entries_inline[g_state.spine.selected_index];
                                     try
                                     {
-                                        auto d = pfd::select_folder("Select destination folder", DialogPaths::StartDir(DialogPaths::Slot::Extract));
-                                        if (!d.result().empty())
+                                        const std::string dest = DialogPaths::SelectFolder(DialogPaths::Slot::Extract, "Select destination folder");
+                                        if (!dest.empty())
                                         {
-                                            std::string dest = d.result();
-                                            DialogPaths::Remember(DialogPaths::Slot::Extract, dest, true);
                                             int exported = 0;
                                             {
                                                 std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*entry.scsp_node);
@@ -4358,11 +4330,9 @@ int main(int argc, char *argv[])
                                 spine_export_pending = false;
                                 try
                                 {
-                                    auto d = pfd::select_folder("Select destination folder", DialogPaths::StartDir(DialogPaths::Slot::Extract));
-                                    if (!d.result().empty() && g_state.spine.selected_index >= 0)
+                                    const std::string dest = DialogPaths::SelectFolder(DialogPaths::Slot::Extract, "Select destination folder");
+                                    if (!dest.empty() && g_state.spine.selected_index >= 0)
                                     {
-                                        std::string dest = d.result();
-                                        DialogPaths::Remember(DialogPaths::Slot::Extract, dest, true);
                                         const auto &entry = spine_entries_inline[g_state.spine.selected_index];
                                         int exported = 0;
                                         std::string modJson = g_state.spine.viewer->getModifiedSkeletonJson();
