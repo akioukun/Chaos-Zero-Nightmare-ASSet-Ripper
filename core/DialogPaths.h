@@ -70,33 +70,33 @@ namespace DialogPaths
         }
 
         /**
-         * Gives a dialog its starting directory.
+         * Gives a dialog its starting directory. The "." fallback is deliberate and must not be turned into an empty string. A folder dialog feeds this
+         * to `SHCreateItemFromParsingName`, which rejects "." and leaves the dialog on the shell's own choice, while "" resolves to the desktop and would
+         * override it.
          *
-         * @param slot The dialog kind about to be shown.
-         * @returns The remembered directory, or the working directory when there is none.
+         * @param remembered The remembered directory, or an empty string when there is none.
+         * @returns A directory to hand the dialog, never empty.
          */
-        inline std::string startDir(Slot slot)
+        inline std::string startDir(const std::string &remembered)
         {
-            const std::string dir = rememberedDir(slot);
-            return dir.empty() ? "." : dir;
+            return remembered.empty() ? "." : remembered;
         }
 
         /**
          * Builds the default path for a save dialog by putting the suggested name inside the remembered directory. The join goes through
          * `std::filesystem` so the separator is native, because the Windows shell fails to parse a folder written with forward slashes.
          *
-         * @param slot The dialog kind about to be shown.
+         * @param remembered The remembered directory, or an empty string when there is none.
          * @param defaultName The suggested file name, such as "filemap.json".
          * @returns A full path when a directory is remembered, otherwise just the name.
          */
-        inline std::string startPath(Slot slot, const std::string &defaultName)
+        inline std::string startPath(const std::string &remembered, const std::string &defaultName)
         {
-            const std::string dir = rememberedDir(slot);
-            if (dir.empty())
+            if (remembered.empty())
             {
                 return defaultName;
             }
-            return Core::PathToUtf8(std::filesystem::path(Core::Utf8ToWString(dir)) / Core::Utf8ToWString(defaultName));
+            return Core::PathToUtf8(std::filesystem::path(Core::Utf8ToWString(remembered)) / Core::Utf8ToWString(defaultName));
         }
 
         /**
@@ -104,12 +104,12 @@ namespace DialogPaths
          * whenever the shell has a most-recently-visited folder for this app, so opening a pack would leave every later folder dialog on the input path.
          * Forcing is only right when there is a folder to force. With nothing remembered, the shell's own guess beats the working directory.
          *
-         * @param rememberedDir The folder to start in, or an empty string when nothing is remembered.
+         * @param remembered The folder to start in, or an empty string when nothing is remembered.
          * @returns The options to hand the dialog.
          */
-        inline pfd::opt folderOptions(const std::string &rememberedDir)
+        inline pfd::opt folderOptions(const std::string &remembered)
         {
-            return rememberedDir.empty() ? pfd::opt::none : pfd::opt::force_path;
+            return remembered.empty() ? pfd::opt::none : pfd::opt::force_path;
         }
 
         /**
@@ -168,7 +168,8 @@ namespace DialogPaths
      */
     inline std::string SaveFile(const std::string &title, const std::string &defaultName, const std::vector<std::string> &filters)
     {
-        pfd::save_file dialog(title, Internal::startPath(Slot::Export, defaultName), filters);
+        const std::string remembered = Internal::rememberedDir(Slot::Export);
+        pfd::save_file dialog(title, Internal::startPath(remembered, defaultName), filters);
         const std::string picked = dialog.result();
         Internal::rememberParentOf(Slot::Export, picked);
         return picked;
@@ -184,7 +185,8 @@ namespace DialogPaths
      */
     inline std::string OpenFile(Slot slot, const std::string &title, const std::vector<std::string> &filters)
     {
-        pfd::open_file dialog(title, Internal::startDir(slot), filters);
+        const std::string remembered = Internal::rememberedDir(slot);
+        pfd::open_file dialog(title, Internal::startDir(remembered), filters);
         const std::vector<std::string> picked = dialog.result();
         if (picked.empty())
         {
@@ -205,7 +207,7 @@ namespace DialogPaths
     inline std::string SelectFolder(Slot slot, const std::string &title)
     {
         const std::string remembered = Internal::rememberedDir(slot);
-        pfd::select_folder dialog(title, remembered.empty() ? "." : remembered, Internal::folderOptions(remembered));
+        pfd::select_folder dialog(title, Internal::startDir(remembered), Internal::folderOptions(remembered));
         const std::string picked = dialog.result();
         Internal::rememberDir(slot, picked);
         return picked;
