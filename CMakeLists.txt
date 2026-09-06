@@ -24,6 +24,7 @@ file(GLOB SPINE_CPP_SOURCES "libs/spine-cpp/src/spine/*.cpp")
 add_executable(
     ${PROJECT_NAME}
     main.cpp
+    archive/ArchiveFactory.cpp
     archive/DataPack.cpp
     archive/ArchiveBase.cpp
     archive/SSRArchive.cpp
