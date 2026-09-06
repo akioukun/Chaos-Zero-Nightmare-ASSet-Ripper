@@ -69,17 +69,35 @@ namespace DialogPaths
             return stored;
         }
 
+        /** How to seed a folder dialog. The two fields have to agree, so they are decided together in `folderSeed`. */
+        struct FolderSeed
+        {
+            /** Path to hand portable-file-dialogs. "." means no preference, see `folderSeed` for why it is not an empty string. */
+            std::string path;
+            /** Whether that path overrides the folder Windows would otherwise pick. */
+            pfd::opt options;
+        };
+
         /**
-         * Gives a dialog its starting directory. The "." fallback is deliberate and must not be turned into an empty string. A folder dialog feeds this
-         * to `SHCreateItemFromParsingName`, which rejects "." and leaves the dialog on the shell's own choice, while "" resolves to the desktop and would
-         * override it.
+         * Decides how to seed a folder dialog. This is folder-dialog-only. A file dialog reads the same string through `GetFileAttributesW`, where "."
+         * is a real directory and would pin the dialog to the working directory, so open and save dialogs pass the remembered path straight through.
+         *
+         * With a folder remembered, `force_path` is required: without it portable-file-dialogs calls `IFileDialog::SetDefaultFolder`, which Windows
+         * ignores whenever the shell has a most-recently-visited folder for this app, so opening a pack would strand every later folder dialog there.
+         *
+         * With nothing remembered, "." is deliberate and must not become an empty string. `SHCreateItemFromParsingName` rejects "." so no folder is set
+         * at all and the shell picks, whereas "" resolves to the desktop and would pin every folder dialog there.
          *
          * @param remembered The remembered directory, or an empty string when there is none.
-         * @returns A directory to hand the dialog, never empty.
+         * @returns The path and options to hand the dialog.
          */
-        inline std::string startDir(const std::string &remembered)
+        inline FolderSeed folderSeed(const std::string &remembered)
         {
-            return remembered.empty() ? "." : remembered;
+            if (remembered.empty())
+            {
+                return {".", pfd::opt::none};
+            }
+            return {remembered, pfd::opt::force_path};
         }
 
         /**
@@ -97,19 +115,6 @@ namespace DialogPaths
                 return defaultName;
             }
             return Core::PathToUtf8(std::filesystem::path(Core::Utf8ToWString(remembered)) / Core::Utf8ToWString(defaultName));
-        }
-
-        /**
-         * Picks the options for a folder dialog. Without `force_path` portable-file-dialogs calls `IFileDialog::SetDefaultFolder`, which Windows ignores
-         * whenever the shell has a most-recently-visited folder for this app, so opening a pack would leave every later folder dialog on the input path.
-         * Forcing is only right when there is a folder to force. With nothing remembered, the shell's own guess beats the working directory.
-         *
-         * @param remembered The folder to start in, or an empty string when nothing is remembered.
-         * @returns The options to hand the dialog.
-         */
-        inline pfd::opt folderOptions(const std::string &remembered)
-        {
-            return remembered.empty() ? pfd::opt::none : pfd::opt::force_path;
         }
 
         /**
@@ -185,8 +190,9 @@ namespace DialogPaths
      */
     inline std::string OpenFile(Slot slot, const std::string &title, const std::vector<std::string> &filters)
     {
+        // Passed straight through: portable-file-dialogs skips the initial directory when this is empty, which lets Windows pick.
         const std::string remembered = Internal::rememberedDir(slot);
-        pfd::open_file dialog(title, Internal::startDir(remembered), filters);
+        pfd::open_file dialog(title, remembered, filters);
         const std::vector<std::string> picked = dialog.result();
         if (picked.empty())
         {
@@ -206,8 +212,8 @@ namespace DialogPaths
      */
     inline std::string SelectFolder(Slot slot, const std::string &title)
     {
-        const std::string remembered = Internal::rememberedDir(slot);
-        pfd::select_folder dialog(title, Internal::startDir(remembered), Internal::folderOptions(remembered));
+        const Internal::FolderSeed seed = Internal::folderSeed(Internal::rememberedDir(slot));
+        pfd::select_folder dialog(title, seed.path, seed.options);
         const std::string picked = dialog.result();
         Internal::rememberDir(slot, picked);
         return picked;
