@@ -5,9 +5,18 @@
 
 struct RipperOptions
 {
+    /** Convert SCT files to PNG while extracting instead of writing the raw SCT. */
     bool exportSctAsPng = true;
+    /** Convert database files to JSON while extracting instead of writing the raw database. */
     bool exportDbAsJson = true;
+    /** Show the "Open Folder" button so a loose folder can be browsed like an archive. */
     bool enableOpenFolder = false;
+    /** Folder the last archive, manifest or view-only folder was picked from. Empty until something has been opened. */
+    std::string lastOpenDir;
+    /** Folder last chosen as an extraction destination. Empty until something has been extracted. */
+    std::string lastExtractDir;
+    /** Folder a single exported file was last saved into. Empty until something has been exported. */
+    std::string lastExportDir;
 };
 
 namespace RipperOptionsInternal
@@ -42,6 +51,8 @@ namespace RipperOptionsInternal
     }
 }
 
+// Writing the whole file each time means a caller that only owns some of the fields must load the current options first, change what it owns, and save
+// that. Default-constructing a RipperOptions and saving it would reset every field the caller did not set.
 inline void SaveRipperOptions(const RipperOptions &options, const std::string &iniPath = "czn_ripper.ini")
 {
     std::ofstream out(iniPath, std::ios::trunc);
@@ -54,6 +65,9 @@ inline void SaveRipperOptions(const RipperOptions &options, const std::string &i
     out << "export_sct_as_png=" << (options.exportSctAsPng ? true : false) << "\n";
     out << "export_db_as_json=" << (options.exportDbAsJson ? true : false) << "\n";
     out << "enable_open_folder=" << (options.enableOpenFolder ? true : false) << "\n";
+    out << "last_open_dir=" << options.lastOpenDir << "\n";
+    out << "last_extract_dir=" << options.lastExtractDir << "\n";
+    out << "last_export_dir=" << options.lastExportDir << "\n";
     out.flush();
 }
 
@@ -97,6 +111,18 @@ inline RipperOptions LoadRipperOptions(const std::string &iniPath = "czn_ripper.
         else if (key == "enable_open_folder")
         {
             options.enableOpenFolder = RipperOptionsInternal::parseBool(value, options.enableOpenFolder);
+        }
+        else if (key == "last_open_dir")
+        {
+            options.lastOpenDir = value;
+        }
+        else if (key == "last_extract_dir")
+        {
+            options.lastExtractDir = value;
+        }
+        else if (key == "last_export_dir")
+        {
+            options.lastExportDir = value;
         }
     }
 
