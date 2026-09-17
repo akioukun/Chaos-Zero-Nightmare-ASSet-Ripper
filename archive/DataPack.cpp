@@ -394,31 +394,6 @@ void DataPack::Scan(std::atomic<float> &progress)
             ScanDecrypted(progress);
         else if (type == PackType::LocalDirectory)
             ScanLocalDirectory(progress);
-
-        std::function<void(Core::FileNode &)> process_node = [&](Core::FileNode &node)
-        {
-            try
-            {
-                if (std::holds_alternative<Core::FileInfo>(node.data))
-                {
-                    const auto &info = std::get<Core::FileInfo>(node.data);
-                }
-                else if (std::holds_alternative<Core::FolderInfo>(node.data))
-                {
-                    auto &folder = std::get<Core::FolderInfo>(node.data);
-                    for (auto &child : folder.children)
-                    {
-                        process_node(child);
-                    }
-                }
-            }
-            catch (const std::exception &e)
-            {
-                LogError("Error processing node: " + std::filesystem::path(node.name).u8string() + " - " + std::string(e.what()));
-            }
-        };
-
-        process_node(root_node);
     }
     catch (const std::exception &e)
     {
@@ -466,12 +441,22 @@ void DataPack::ScanEncrypted(std::atomic<float> &progress)
     }
 
     uint64_t cursor = 4; // entries can't start before offset 4
+    uint64_t next_progress_cursor = 0;
+    uint64_t step = total_file_size / 500;
+    if (step < 64ULL * 1024) step = 64ULL * 1024;
+    if (step > 2ULL * 1024 * 1024) step = 2ULL * 1024 * 1024;
+    uint64_t progress_interval = (total_file_size > 0) ? step : (64ULL * 1024);
 
     while (cursor < total_file_size)
     {
-        if ((cursor & 0xFFFFF) == 0)
+        if (cursor >= next_progress_cursor)
         {
-            progress = (float)cursor / total_file_size;
+            if (total_file_size > 0)
+            {
+                float p = static_cast<float>(cursor) / static_cast<float>(total_file_size);
+                progress = (p > 1.0f) ? 1.0f : p;
+            }
+            next_progress_cursor = cursor + progress_interval;
         }
 
         size_t available = 0;
@@ -563,12 +548,22 @@ void DataPack::ScanEncrypted(std::atomic<float> &progress)
 void DataPack::ScanDecrypted(std::atomic<float> &progress)
 {
     uint64_t cursor = 0;
+    uint64_t next_progress_cursor = 0;
+    uint64_t step = total_file_size / 500;
+    if (step < 64ULL * 1024) step = 64ULL * 1024;
+    if (step > 2ULL * 1024 * 1024) step = 2ULL * 1024 * 1024;
+    uint64_t progress_interval = (total_file_size > 0) ? step : (64ULL * 1024);
 
     while (cursor < total_file_size)
     {
-        if ((cursor & 0xFFFFF) == 0)
+        if (cursor >= next_progress_cursor)
         {
-            progress = (float)cursor / total_file_size;
+            if (total_file_size > 0)
+            {
+                float p = static_cast<float>(cursor) / static_cast<float>(total_file_size);
+                progress = (p > 1.0f) ? 1.0f : p;
+            }
+            next_progress_cursor = cursor + progress_interval;
         }
 
         size_t available = 0;

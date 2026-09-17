@@ -40,23 +40,31 @@ void CompositeArchive::Scan(std::atomic<float>& progress)
         }
         
         // Merge tree
-        std::function<void(const Core::FileNode&)> merge_func = [&](const Core::FileNode& n) {
-            if (std::holds_alternative<Core::FileInfo>(n.data)) {
-                const auto& info = std::get<Core::FileInfo>(n.data);
-                // We preserve the offset and size, but set the archive_id to our child's index
-                AddFileToTree(n.full_path, info.offset, info.size, static_cast<uint32_t>(i));
-            } else if (std::holds_alternative<Core::FolderInfo>(n.data)) {
-                const auto& folder_info = std::get<Core::FolderInfo>(n.data);
-                for (const auto& child : folder_info.children) {
-                    merge_func(child);
+        if (i == 0) {
+            root_node = archives[0]->GetFileTree();
+            parsed_file_count.store(archives[0]->GetParsedFileCount(), std::memory_order_relaxed);
+            parsed_total_size.store(archives[0]->GetParsedTotalSize(), std::memory_order_relaxed);
+        } else {
+            std::function<void(const Core::FileNode&)> merge_func = [&](const Core::FileNode& n) {
+                if (std::holds_alternative<Core::FileInfo>(n.data)) {
+                    const auto& info = std::get<Core::FileInfo>(n.data);
+                    // We preserve the offset and size, but set the archive_id to our child's index
+                    AddFileToTree(n.full_path, info.offset, info.size, static_cast<uint32_t>(i));
+                } else if (std::holds_alternative<Core::FolderInfo>(n.data)) {
+                    const auto& folder_info = std::get<Core::FolderInfo>(n.data);
+                    for (const auto& child : folder_info.children) {
+                        merge_func(child);
+                    }
                 }
-            }
-        };
+            };
 
-        merge_func(archives[i]->GetFileTree());
+            merge_func(archives[i]->GetFileTree());
+        }
         progress = (i + 1) * weight;
     }
-    SortTree();
+    if (archives.size() > 1) {
+        SortTree();
+    }
     progress = 1.0f;
 }
 
