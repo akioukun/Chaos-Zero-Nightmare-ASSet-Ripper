@@ -80,3 +80,13 @@ target_link_libraries(${PROJECT_NAME}
     astc-encoder::astcenc-static
     Threads::Threads
 )
+
+# Headless CLI. Deliberately links none of SDL2, SDL2_image, GLEW, OpenGL, or spine-cpp.
+add_executable(czn-cli cli/main_cli.cpp)
+
+target_link_libraries(czn-cli PRIVATE czn_core)
+
+if(WIN32)
+    # CommandLineToArgvW, used to read the command line as UTF-8.
+    target_link_libraries(czn-cli PRIVATE Shell32)
+endif()
