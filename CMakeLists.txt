@@ -21,9 +21,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 file(GLOB SPINE_CPP_SOURCES "libs/spine-cpp/src/spine/*.cpp")
 
-add_executable(
-    ${PROJECT_NAME}
-    main.cpp
+# Sources shared by the GUI and the headless CLI. Nothing here depends on SDL2, OpenGL, or spine-cpp, which is what lets czn-cli link without them.
+set(CZN_CORE_SOURCES
     archive/ArchiveFactory.cpp
     archive/DataPack.cpp
     archive/ArchiveBase.cpp
@@ -32,9 +31,29 @@ add_executable(
     parsers/SCTParser.cpp
     parsers/DBParser.cpp
     parsers/SCSPParser.cpp
+    libs/zstd/zstddeclib.c
+)
+
+set(CZN_CORE_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/core"
+    "${CMAKE_CURRENT_SOURCE_DIR}/archive"
+    "${CMAKE_CURRENT_SOURCE_DIR}/parsers"
+    "${CMAKE_CURRENT_SOURCE_DIR}/libs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/libs/zstd"
+)
+
+# Compiled once and reused by both executables rather than built separately for each.
+add_library(czn_core OBJECT ${CZN_CORE_SOURCES})
+target_include_directories(czn_core PUBLIC ${CZN_CORE_INCLUDE_DIRS})
+target_link_libraries(czn_core PUBLIC astc-encoder::astcenc-static Threads::Threads)
+
+add_executable(
+    ${PROJECT_NAME}
+    main.cpp
+    $<TARGET_OBJECTS:czn_core>
     parsers/SpineDictionary.cpp
     parsers/SpineRenderer.cpp
-    libs/zstd/zstddeclib.c
     ${SPINE_CPP_SOURCES}
 )
 
@@ -44,12 +63,7 @@ endif()
 target_include_directories(
     ${PROJECT_NAME}
     PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/core"
-    "${CMAKE_CURRENT_SOURCE_DIR}/archive"
-    "${CMAKE_CURRENT_SOURCE_DIR}/parsers"
-    "${CMAKE_CURRENT_SOURCE_DIR}/libs"
-    "${CMAKE_CURRENT_SOURCE_DIR}/libs/zstd"
+    ${CZN_CORE_INCLUDE_DIRS}
     "${CMAKE_CURRENT_SOURCE_DIR}/libs/spine-cpp/include"
     ${SDL2_INCLUDE_DIRS}
     ${GLEW_INCLUDE_DIRS}
