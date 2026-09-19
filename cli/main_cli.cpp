@@ -82,6 +82,21 @@ static std::string normalize_archive_path(const std::string& raw)
     return normalized;
 }
 
+/**
+ * Builds the output base to hand to `IArchive::Extract` so the archive path is preserved in full. Extract appends only the node's own name, so passing the
+ * node's parent prefix makes the final path come out as <dest>/<full archive path>.
+ * @param dest The user's --out directory.
+ * @param node_full_path The node's archive-relative full_path.
+ * @returns The directory to pass as Extract's output_path.
+ */
+static std::filesystem::path output_base_for(const std::filesystem::path& dest, const std::string& node_full_path)
+{
+    const size_t slash = node_full_path.find_last_of('/');
+    if (slash == std::string::npos)
+        return dest;
+    return dest / std::filesystem::path(Core::Utf8ToWString(node_full_path.substr(0, slash)));
+}
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Argument parsing
@@ -129,6 +144,8 @@ static void print_help()
         "  -h, --help             show this help and exit\n"
         "\n"
         "Notes:\n"
+        "  Output preserves the full archive path. --out D:\\out --folder gameres/spine\n"
+        "  writes D:\\out\\gameres\\spine\\...\n"
         "  .sct and .sct2 textures are written as .png, and .db and .scsp files as .json.\n"
         "  Settings in czn_ripper.ini are ignored.\n"
         "\n"
@@ -364,9 +381,10 @@ int main(int argc, char** argv)
         const Core::FileNode* node = resolved[i];
         std::cout << "[" << (i + 1) << "/" << resolved.size() << "] " << node->full_path << "\n";
 
+        const std::filesystem::path out_base = output_base_for(dest_path, node->full_path);
         try
         {
-            archive->Extract(*node, dest_path.wstring(), progress, true, true);
+            archive->Extract(*node, out_base.wstring(), progress, true, true);
         }
         catch (const std::exception& e)
         {
