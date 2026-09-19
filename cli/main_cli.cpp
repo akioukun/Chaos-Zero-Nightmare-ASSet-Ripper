@@ -1,9 +1,14 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <future>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -13,6 +18,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
 
 #include "core/Core.h"
@@ -23,7 +31,7 @@
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // //////////////////////////////////////////////////////////////////////////////////////////////////
-// Constants
+// Constants and global state
 
 // Exit codes. Scripts can tell "nothing worked" apart from "most of it worked".
 static constexpr int CLI_EXIT_OK = 0;
@@ -35,6 +43,14 @@ static constexpr int CLI_EXIT_ALL_FAILED = 4;
 // Returned by parse_args when help was printed, so main can exit successfully without doing any work.
 static constexpr int CLI_PARSE_HELP = -1;
 
+static constexpr int PROGRESS_BAR_WIDTH = 30;
+static constexpr int PROGRESS_POLL_MS = 100;
+// When stdout is redirected we cannot redraw in place, so only emit a line every this many percent.
+static constexpr int PROGRESS_FILE_STEP_PERCENT = 5;
+
+// Set once in main, then read by the progress functions to choose between an in-place bar and plain lines.
+static bool g_stdout_is_tty = false;
+
 /** Parsed command line for a single CLI run. */
 struct CliOptions
 {
@@ -44,6 +60,17 @@ struct CliOptions
     std::string out;
     /** Normalized archive-relative folder (or file) paths to extract, in the order given, without duplicates. */
     std::vector<std::string> folders;
+};
+
+/** One requested folder that was found in the archive, with its measured weight. */
+struct ResolvedFolder
+{
+    /** The matching node in the archive's file tree. Its full_path is the path the user asked for. */
+    const Core::FileNode* node;
+    /** Total bytes of every file under the node, used to weight the overall percentage. */
+    uint64_t bytes;
+    /** Number of files under the node. */
+    uint32_t files;
 };
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -95,6 +122,95 @@ static std::filesystem::path output_base_for(const std::filesystem::path& dest, 
     if (slash == std::string::npos)
         return dest;
     return dest / std::filesystem::path(Core::Utf8ToWString(node_full_path.substr(0, slash)));
+}
+
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// Progress reporting
+
+/**
+ * Redraws the progress bar in place on a console, or emits sparse plain lines when stdout is redirected. Safe to use a carriage return here because the
+ * extraction path logs to czn_ripper.log rather than stdout. The one exception is SCTParser's std::cerr writes on a hard astcenc failure, which will smear
+ * the bar. That is acceptable since those signal a real decode problem worth seeing.
+ * @param label Short prefix such as "Scanning".
+ * @param fraction Progress in the range [0, 1].
+ * @param suffix Trailing detail such as "total 42%", or empty for none.
+ * @param last_percent The last percentage this operation printed, updated in place. Only used when stdout is redirected.
+ */
+static void draw_progress(const std::string& label, float fraction, const std::string& suffix, int& last_percent)
+{
+    fraction = std::min(1.0f, std::max(0.0f, fraction));
+    const int percent = static_cast<int>(fraction * 100.0f + 0.5f);
+
+    if (!g_stdout_is_tty)
+    {
+        if (percent == last_percent || (percent % PROGRESS_FILE_STEP_PERCENT) != 0)
+            return;
+        last_percent = percent;
+        std::cout << label << " " << percent << "%";
+        if (!suffix.empty())
+            std::cout << " " << suffix;
+        std::cout << "\n";
+        return;
+    }
+
+    const int filled = static_cast<int>(fraction * PROGRESS_BAR_WIDTH + 0.5f);
+    std::string bar(static_cast<size_t>(filled), '#');
+    bar.append(static_cast<size_t>(PROGRESS_BAR_WIDTH - filled), '-');
+
+    // The trailing spaces erase leftovers from a previously longer line.
+    std::cout << '\r' << label << " [" << bar << "] " << std::setw(3) << percent << "%  " << suffix << "        " << std::flush;
+}
+
+/**
+ * Runs an operation and turns any escaping exception into a reported failure, so one bad folder does not abandon the rest of the run.
+ * @param work The operation to run.
+ * @returns True when the operation completed without throwing.
+ */
+static bool run_guarded(const std::function<void()>& work)
+{
+    try
+    {
+        work();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "  error: " << e.what() << "\n";
+        LogError(std::string("CLI operation failed: ") + e.what());
+        return false;
+    }
+    catch (...)
+    {
+        std::cerr << "  error: unknown exception\n";
+        LogError("CLI operation failed with an unknown exception");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Runs a blocking archive operation on a worker thread while the calling thread polls its progress atomic and redraws the bar. The archive API has no
+ * progress callback, so polling is the only way to show movement. Only one worker runs at a time, so the pack's sliding memory map is never shared.
+ * @param label Progress bar label.
+ * @param progress The atomic the operation writes into.
+ * @param suffix_fn Called on each tick to build the bar's trailing text.
+ * @param work The blocking operation.
+ * @returns True when the operation completed without throwing.
+ */
+static bool run_with_progress(const std::string& label, std::atomic<float>& progress, const std::function<std::string()>& suffix_fn, const std::function<void()>& work)
+{
+    progress = 0.f;
+    int last_percent = -1;
+    std::future<void> future = std::async(std::launch::async, work);
+
+    while (future.wait_for(std::chrono::milliseconds(PROGRESS_POLL_MS)) != std::future_status::ready)
+        draw_progress(label, progress.load(), suffix_fn(), last_percent);
+
+    draw_progress(label, 1.0f, suffix_fn(), last_percent);
+    if (g_stdout_is_tty)
+        std::cout << "\n";
+
+    return run_guarded([&future] { future.get(); });
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -282,6 +398,9 @@ int main(int argc, char** argv)
 {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
+    g_stdout_is_tty = _isatty(_fileno(stdout)) != 0;
+#else
+    g_stdout_is_tty = isatty(1) != 0;
 #endif
 
     CliOptions options;
@@ -316,17 +435,7 @@ int main(int argc, char** argv)
     LogInfo("CLI run started for pack: " + options.pack);
 
     std::unique_ptr<IArchive> archive;
-    try
-    {
-        archive = CreateArchive(pack_path.wstring());
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "error: could not open pack: " << e.what() << "\n";
-        LogError(std::string("CLI could not open pack: ") + e.what());
-        return CLI_EXIT_PACK_FAILED;
-    }
-    if (!archive)
+    if (!run_guarded([&] { archive = CreateArchive(pack_path.wstring()); }) || !archive)
     {
         std::cerr << "error: could not open pack: " << options.pack << "\n";
         return CLI_EXIT_PACK_FAILED;
@@ -337,14 +446,9 @@ int main(int argc, char** argv)
     std::cout << "Scanning pack (this can take a while for a full data.pack)...\n";
 
     std::atomic<float> progress = 0.f;
-    try
+    if (!run_with_progress("Scanning", progress, [] { return std::string(); }, [&] { archive->Scan(progress); }))
     {
-        archive->Scan(progress);
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "error: scan failed: " << e.what() << "\n";
-        LogError(std::string("CLI scan failed: ") + e.what());
+        std::cerr << "error: scan failed\n";
         return CLI_EXIT_PACK_FAILED;
     }
 
@@ -352,8 +456,9 @@ int main(int argc, char** argv)
 
     // Resolve every requested folder up front so missing ones are reported before any writing starts.
     const Core::FileNode& root = archive->GetFileTree();
-    std::vector<const Core::FileNode*> resolved;
+    std::vector<ResolvedFolder> resolved;
     std::vector<std::string> missing;
+    uint64_t bytes_total = 0;
 
     for (const std::string& folder : options.folders)
     {
@@ -365,7 +470,12 @@ int main(int argc, char** argv)
             missing.push_back(folder);
             continue;
         }
-        resolved.push_back(node);
+
+        uint64_t bytes = 0;
+        uint32_t files = 0;
+        Core::NodeStats(*node, bytes, files);
+        bytes_total += bytes;
+        resolved.push_back({node, bytes, files});
     }
 
     if (resolved.empty())
@@ -375,23 +485,37 @@ int main(int argc, char** argv)
     }
 
     std::vector<std::string> failed;
+    uint64_t bytes_done = 0;
 
     for (size_t i = 0; i < resolved.size(); ++i)
     {
-        const Core::FileNode* node = resolved[i];
-        std::cout << "[" << (i + 1) << "/" << resolved.size() << "] " << node->full_path << "\n";
+        const ResolvedFolder& folder = resolved[i];
+        const std::string& folder_path = folder.node->full_path;
 
-        const std::filesystem::path out_base = output_base_for(dest_path, node->full_path);
-        try
+        std::cout << "[" << (i + 1) << "/" << resolved.size() << "] " << folder_path << "  (" << folder.files << " files, " << Core::FormatSize(folder.bytes) << ")\n";
+
+        // Extract returns straight away when the subtree holds no bytes, so say so here rather than flashing a bar to 100%.
+        if (folder.bytes == 0)
         {
-            archive->Extract(*node, out_base.wstring(), progress, true, true);
+            std::cout << "  warning: no data to extract\n";
+            LogInfo("CLI folder holds no data: " + folder_path);
+            continue;
         }
-        catch (const std::exception& e)
+
+        // The bar tracks the current folder while the suffix shows progress across all of them.
+        const std::filesystem::path out_base = output_base_for(dest_path, folder_path);
+        auto suffix_fn = [&]
         {
-            std::cerr << "  error: " << e.what() << "\n";
-            LogError("CLI extraction failed for " + node->full_path + ": " + e.what());
-            failed.push_back(node->full_path);
-        }
+            const float local = std::min(1.0f, std::max(0.0f, progress.load()));
+            const uint64_t overall_done = bytes_done + static_cast<uint64_t>(local * static_cast<float>(folder.bytes));
+            return "total " + std::to_string(static_cast<int>(100.0 * static_cast<double>(overall_done) / static_cast<double>(bytes_total))) + "%";
+        };
+        auto work = [&] { archive->Extract(*folder.node, out_base.wstring(), progress, true, true); };
+
+        if (!run_with_progress("  Extracting", progress, suffix_fn, work))
+            failed.push_back(folder_path);
+
+        bytes_done += folder.bytes;
     }
 
     const size_t failure_count = missing.size() + failed.size();
