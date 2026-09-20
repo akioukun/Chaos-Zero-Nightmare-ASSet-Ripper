@@ -50,6 +50,8 @@ static constexpr int PROGRESS_FILE_STEP_PERCENT = 5;
 
 // Set once in main, then read by the progress functions to choose between an in-place bar and plain lines.
 static bool g_stdout_is_tty = false;
+// Set while parsing -q, then read by the progress functions to suppress their output entirely.
+static bool g_quiet = false;
 
 /** Parsed command line for a single CLI run. */
 struct CliOptions
@@ -60,6 +62,12 @@ struct CliOptions
     std::string out;
     /** Normalized archive-relative folder (or file) paths to extract, in the order given, without duplicates. */
     std::vector<std::string> folders;
+    /** Convert .sct / .sct2 textures to .png and rewrite .atlas texture references to match. */
+    bool convert_sct_to_png = true;
+    /** Convert encrypted .db files to .json. */
+    bool convert_db_to_json = true;
+    /** Print every extracted file instead of just a progress bar. */
+    bool verbose = false;
 };
 
 /** One requested folder that was found in the archive, with its measured weight. */
@@ -139,6 +147,9 @@ static std::filesystem::path output_base_for(const std::filesystem::path& dest, 
  */
 static void draw_progress(const std::string& label, float fraction, const std::string& suffix, int& last_percent)
 {
+    if (g_quiet)
+        return;
+
     fraction = std::min(1.0f, std::max(0.0f, fraction));
     const int percent = static_cast<int>(fraction * 100.0f + 0.5f);
 
@@ -207,7 +218,7 @@ static bool run_with_progress(const std::string& label, std::atomic<float>& prog
         draw_progress(label, progress.load(), suffix_fn(), last_percent);
 
     draw_progress(label, 1.0f, suffix_fn(), last_percent);
-    if (g_stdout_is_tty)
+    if (!g_quiet && g_stdout_is_tty)
         std::cout << "\n";
 
     return run_guarded([&future] { future.get(); });
@@ -249,7 +260,7 @@ static void print_help()
         "czn-cli - headless extractor for Chaos Zero Nightmare data.pack\n"
         "\n"
         "Usage:\n"
-        "  czn-cli --pack <path> --out <dir> --folder <archive/path> [--folder ...]\n"
+        "  czn-cli --pack <path> --out <dir> --folder <archive/path> [--folder ...] [options]\n"
         "\n"
         "Required:\n"
         "  -p, --pack <path>      data.pack, manifest.ssra, or an unpacked directory\n"
@@ -257,22 +268,33 @@ static void print_help()
         "  -f, --folder <path>    archive-relative folder or file to extract; repeatable\n"
         "\n"
         "Options:\n"
+        "      --no-png           keep .sct / .sct2 as-is instead of converting to .png\n"
+        "      --no-json          keep .db as-is instead of converting to .json\n"
+        "  -v, --verbose          print each extracted file\n"
+        "  -q, --quiet            suppress the progress bar; print only the summary\n"
         "  -h, --help             show this help and exit\n"
         "\n"
         "Notes:\n"
         "  Output preserves the full archive path. --out D:\\out --folder gameres/spine\n"
         "  writes D:\\out\\gameres\\spine\\...\n"
-        "  .sct and .sct2 textures are written as .png, and .db and .scsp files as .json.\n"
-        "  Settings in czn_ripper.ini are ignored.\n"
+        "  .scsp files are always converted to .json.\n"
+        "  Settings in czn_ripper.ini are ignored. Use the flags above.\n"
+        "  Prefer a short destination path. Deep archive paths can exceed the Windows\n"
+        "  MAX_PATH limit when the destination is already long.\n"
         "\n"
-        "Exit codes report whether each requested folder was found and extracted. Errors\n"
+        "Exit codes report whether each requested folder was FOUND and extracted. Errors\n"
         "on individual files are logged and skipped without changing the exit code, so\n"
         "check czn_ripper.log in the working directory to confirm a clean run.\n"
         "  0  every requested folder was found and extracted\n"
         "  1  usage error\n"
         "  2  pack could not be opened or scanned\n"
         "  3  some requested folders were missing or failed\n"
-        "  4  none of the requested folders could be extracted\n";
+        "  4  none of the requested folders could be extracted\n"
+        "\n"
+        "Example:\n"
+        "  czn-cli --pack \"C:\\Games\\ChaosZeroNightmare\\bin\\appdata\\cznlive\\data.pack\"\n"
+        "          --out D:\\czn_assets\n"
+        "          --folder card --folder story --folder cutin --folder collapse\n";
 }
 
 /**
@@ -327,8 +349,19 @@ static int parse_args(const std::vector<std::string>& args, CliOptions& out_opti
             return true;
         };
 
+        // Rejects "--no-png=false" and friends, which would otherwise be read as the flag with the value silently discarded.
+        auto reject_value = [&]() -> bool
+        {
+            if (!has_inline)
+                return true;
+            std::cerr << "error: " << arg << " does not take a value\n";
+            return false;
+        };
+
         if (arg == "-h" || arg == "--help")
         {
+            if (!reject_value())
+                return CLI_EXIT_USAGE;
             print_help();
             return CLI_PARSE_HELP;
         }
@@ -358,6 +391,30 @@ static int parse_args(const std::vector<std::string>& args, CliOptions& out_opti
             if (seen_folders.insert(normalized).second)
                 out_options.folders.push_back(normalized);
         }
+        else if (arg == "--no-png")
+        {
+            if (!reject_value())
+                return CLI_EXIT_USAGE;
+            out_options.convert_sct_to_png = false;
+        }
+        else if (arg == "--no-json")
+        {
+            if (!reject_value())
+                return CLI_EXIT_USAGE;
+            out_options.convert_db_to_json = false;
+        }
+        else if (arg == "-v" || arg == "--verbose")
+        {
+            if (!reject_value())
+                return CLI_EXIT_USAGE;
+            out_options.verbose = true;
+        }
+        else if (arg == "-q" || arg == "--quiet")
+        {
+            if (!reject_value())
+                return CLI_EXIT_USAGE;
+            g_quiet = true;
+        }
         else
         {
             std::cerr << "error: unrecognized argument \"" << args[i] << "\"\n";
@@ -382,6 +439,39 @@ static int parse_args(const std::vector<std::string>& args, CliOptions& out_opti
     }
 
     return CLI_EXIT_OK;
+}
+
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// Extraction
+
+/**
+ * Extracts one file at a time so each name can be printed. `IArchive::Extract` accepts any node including a leaf file, so this needs no change to the archive
+ * code. Only used for --verbose since the per-file calls add a couple of log lines each.
+ * @param archive The scanned archive.
+ * @param node The node to walk.
+ * @param dest The user's --out directory.
+ * @param options Conversion flags.
+ * @param files_done Running count of files written, updated in place.
+ * @param files_total Total files expected, used for the printed counter.
+ */
+static void extract_verbose(IArchive& archive, const Core::FileNode& node, const std::filesystem::path& dest, const CliOptions& options, uint32_t& files_done, uint32_t files_total)
+{
+    if (std::holds_alternative<Core::FileInfo>(node.data))
+    {
+        const auto& info = std::get<Core::FileInfo>(node.data);
+        const std::filesystem::path out_base = output_base_for(dest, node.full_path);
+
+        std::atomic<float> local_progress = 0.f;
+        archive.Extract(node, out_base.wstring(), local_progress, options.convert_sct_to_png, options.convert_db_to_json);
+
+        ++files_done;
+        std::cout << "  [" << files_done << "/" << files_total << "] " << node.full_path << "  (" << Core::FormatSize(info.size) << ")\n";
+        return;
+    }
+
+    for (const auto& child : std::get<Core::FolderInfo>(node.data).children)
+        extract_verbose(archive, child, dest, options, files_done, files_total);
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -502,20 +592,29 @@ int main(int argc, char** argv)
             continue;
         }
 
-        // The bar tracks the current folder while the suffix shows progress across all of them.
-        const std::filesystem::path out_base = output_base_for(dest_path, folder_path);
-        auto suffix_fn = [&]
+        bool ok = true;
+        if (options.verbose)
         {
-            const float local = std::min(1.0f, std::max(0.0f, progress.load()));
-            const uint64_t overall_done = bytes_done + static_cast<uint64_t>(local * static_cast<float>(folder.bytes));
-            return "total " + std::to_string(static_cast<int>(100.0 * static_cast<double>(overall_done) / static_cast<double>(bytes_total))) + "%";
-        };
-        auto work = [&] { archive->Extract(*folder.node, out_base.wstring(), progress, true, true); };
-
-        if (!run_with_progress("  Extracting", progress, suffix_fn, work))
-            failed.push_back(folder_path);
+            uint32_t files_done = 0;
+            ok = run_guarded([&] { extract_verbose(*archive, *folder.node, dest_path, options, files_done, folder.files); });
+        }
+        else
+        {
+            // The bar tracks the current folder while the suffix shows progress across all of them.
+            const std::filesystem::path out_base = output_base_for(dest_path, folder_path);
+            auto suffix_fn = [&]
+            {
+                const float local = std::min(1.0f, std::max(0.0f, progress.load()));
+                const uint64_t overall_done = bytes_done + static_cast<uint64_t>(local * static_cast<float>(folder.bytes));
+                return "total " + std::to_string(static_cast<int>(100.0 * static_cast<double>(overall_done) / static_cast<double>(bytes_total))) + "%";
+            };
+            auto work = [&] { archive->Extract(*folder.node, out_base.wstring(), progress, options.convert_sct_to_png, options.convert_db_to_json); };
+            ok = run_with_progress("  Extracting", progress, suffix_fn, work);
+        }
 
         bytes_done += folder.bytes;
+        if (!ok)
+            failed.push_back(folder_path);
     }
 
     const size_t failure_count = missing.size() + failed.size();
