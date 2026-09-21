@@ -43,7 +43,7 @@ private:
     void ScanLocalDirectory(std::atomic<float>& progress);
     
     std::vector<std::wstring> FindPackParts(const std::wstring& basePath);
-    bool LoadPackPart(const std::wstring& path, size_t partIndex);
+    bool LoadPackPart(const std::wstring& path);
 
     bool EnsureWindow(PackPart& part, uint64_t offset, size_t needed) const;
     const uint8_t* GetDataAtOffset(uint64_t offset, size_t& outSize);

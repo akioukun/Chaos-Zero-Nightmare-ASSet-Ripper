@@ -141,7 +141,7 @@ bool DataPack::EnsureWindow(PackPart &part, uint64_t offset, size_t needed) cons
     return true;
 }
 
-bool DataPack::LoadPackPart(const std::wstring &path, size_t partIndex)
+bool DataPack::LoadPackPart(const std::wstring &path)
 {
     PackPart part;
 
@@ -265,7 +265,7 @@ DataPack::DataPack(const std::wstring &path)
     // load all parts
     for (size_t i = 0; i < packParts.size(); ++i)
     {
-        if (!LoadPackPart(packParts[i], i))
+        if (!LoadPackPart(packParts[i]))
         {
             LogError("Failed to load pack part: " + std::filesystem::path(packParts[i]).u8string());
             // continue
@@ -407,8 +407,6 @@ void DataPack::Scan(std::atomic<float> &progress)
 void DataPack::ScanLocalDirectory(std::atomic<float>& progress)
 {
     std::filesystem::path base_path(pack_path);
-    uint32_t count = 0;
-    uint64_t total = 0;
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(base_path, std::filesystem::directory_options::skip_permission_denied))
     {
@@ -420,13 +418,9 @@ void DataPack::ScanLocalDirectory(std::atomic<float>& progress)
 
             uint64_t size = entry.file_size();
             AddFileToTree(rel_path_str, 0, size);
-            count++;
-            total += size;
         }
     }
 
-    parsed_file_count = count;
-    parsed_total_size = total;
     progress = 1.0f;
 }
 
