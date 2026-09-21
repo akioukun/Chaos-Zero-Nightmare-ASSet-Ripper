@@ -3378,7 +3378,7 @@ int main(int argc, char *argv[])
                         nk_button_label_styled(ctx, &button_style, g_state.browser.data_pack->GetFileTree().name.c_str());
 
                         nk_layout_row_push(ctx, 200.0f);
-                        std::string info = std::to_string(g_state.browser.data_pack->GetParsedFileCount()) + " items | " + format_size(g_state.browser.data_pack->GetParsedTotalSize());
+                        std::string info = "0 items | " + format_size(0);
                         nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
                         nk_layout_row_end(ctx);
                     }
