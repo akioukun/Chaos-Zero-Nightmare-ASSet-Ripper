@@ -8,6 +8,25 @@
 #include <cstring>
 #include <algorithm>
 
+namespace {
+    constexpr uint8_t kZstdMagic = 0x28;
+    constexpr uint8_t kLegacyZstdMagicFirst = 0x25;
+    constexpr uint8_t kLegacyZstdMagicLast = 0x27;
+
+    bool NormalizeLegacyZstdFrame(std::vector<uint8_t>& buffer)
+    {
+        if (buffer.size() < 4 || buffer[1] != 0xB5 || buffer[2] != 0x2F || buffer[3] != 0xFD) {
+            return false;
+        }
+
+        if (buffer[0] < kLegacyZstdMagicFirst || buffer[0] > kLegacyZstdMagicLast) {
+            return false;
+        }
+        buffer[0] = kZstdMagic;
+        return true;
+    }
+}
+
 #pragma pack(push, 1)
 struct SSRAHeader {
     char magic[4]; // "SSRA"
@@ -183,8 +202,70 @@ void SSRArchive::Scan(std::atomic<float>& progress)
         uint64_t current_offset = 0;
         for (ChunkInfo* c : list) {
             c->global_offset = current_offset;
-            current_offset += c->compressed_size;
+            current_offset += c->size_bytes;
         }
+    }
+
+    const std::filesystem::path chunks_path = std::filesystem::path(chunks_dir);
+    std::vector<std::filesystem::path> physical_files;
+    std::map<uint64_t, std::vector<std::filesystem::path>> physical_files_by_size;
+    if (std::filesystem::is_directory(chunks_path)) {
+        for (const auto& entry : std::filesystem::directory_iterator(chunks_path)) {
+            if (entry.is_regular_file() && entry.path().extension() == L".ssrc") {
+                physical_files.push_back(entry.path());
+                physical_files_by_size[std::filesystem::file_size(entry.path())].push_back(entry.path());
+            }
+        }
+    }
+
+    for (auto& chunk : chunks) {
+        std::vector<std::string> names = {chunk.name};
+        auto group_name = group_names.find(chunk.group_idx);
+        if (group_name != group_names.end() && !group_name->second.empty()) {
+            char name[64];
+            snprintf(name, sizeof(name), "%s_b%02u_0.ssrc", group_name->second.c_str(), chunk.chunk_id);
+            names.emplace_back(name);
+        }
+
+        for (const auto& physical : physical_files) {
+            const std::string physical_name = Core::PathToUtf8(physical.filename());
+            const uint64_t physical_size = std::filesystem::file_size(physical);
+            if (physical_size != chunk.compressed_size) {
+                continue;
+            }
+            bool name_match = false;
+            for (const auto& name : names) {
+                if (physical_name == name) {
+                    name_match = true;
+                    break;
+                }
+            }
+            if (name_match) {
+                chunk.physical_path = physical.wstring();
+                break;
+            }
+        }
+
+        if (chunk.physical_path.empty()) {
+            const auto size_match = physical_files_by_size.find(chunk.compressed_size);
+            if (size_match != physical_files_by_size.end() && size_match->second.size() == 1) {
+                chunk.physical_path = size_match->second.front().wstring();
+            }
+        }
+
+        if (chunk.physical_path.empty()) {
+            LogInfo("Skipping unavailable SSRA chunk: " + chunk.name);
+        }
+    }
+
+    size_t unavailable_chunk_count = 0;
+    for (const auto& chunk : chunks) {
+        if (chunk.physical_path.empty()) {
+            ++unavailable_chunk_count;
+        }
+    }
+    if (unavailable_chunk_count != 0) {
+        LogInfo("SSRA unavailable chunks skipped: " + std::to_string(unavailable_chunk_count));
     }
 
     // Read files
@@ -195,6 +276,21 @@ void SSRArchive::Scan(std::atomic<float>& progress)
 
         SSRAFileEntry file_entry;
         std::memcpy(&file_entry, data.data() + entry_off, sizeof(SSRAFileEntry));
+
+        bool chunk_available = false;
+        for (const auto& chunk : chunks) {
+            if (chunk.group_idx == file_entry.chunk_idx &&
+                file_entry.chunk_file_off >= chunk.global_offset &&
+                file_entry.chunk_file_off < chunk.global_offset + chunk.size_bytes &&
+                file_entry.chunk_file_off + file_entry.comp_sz <= chunk.global_offset + chunk.size_bytes &&
+                !chunk.physical_path.empty()) {
+                chunk_available = true;
+                break;
+            }
+        }
+        if (!chunk_available) {
+            continue;
+        }
 
         // Skip tombstone/deleted files
         if ((file_entry.flags & 1) != 0) {
@@ -263,7 +359,7 @@ std::vector<uint8_t> SSRArchive::GetFileData(const Core::FileNode& node)
     const ChunkInfo* target_chunk = nullptr;
     for (const auto& c : chunks) {
         if (c.group_idx == group_idx) {
-            if (global_off >= c.global_offset && global_off < c.global_offset + c.compressed_size) {
+            if (global_off >= c.global_offset && global_off < c.global_offset + c.size_bytes) {
                 target_chunk = &c;
                 break;
             }
@@ -275,133 +371,57 @@ std::vector<uint8_t> SSRArchive::GetFileData(const Core::FileNode& node)
         return {};
     }
 
-    const ChunkInfo& c_info = *target_chunk;
     SSRAFileInfo s_info = s_info_orig;
-    s_info.offset = global_off - c_info.global_offset; // local offset
 
-    std::filesystem::path manifest_p(manifest_path);
-    std::filesystem::path manifest_dir = manifest_p.parent_path();
-
-    std::vector<std::filesystem::path> search_dirs = {
-        manifest_dir / L"chunks",
-        manifest_dir,
-        manifest_dir.parent_path() / L"chunks",
-        manifest_dir.parent_path(),
-        manifest_dir.parent_path().parent_path() / L"chunks",
-        manifest_dir.parent_path().parent_path(),
-        std::filesystem::path(chunks_dir)
-    };
-
-    std::vector<std::string> candidate_names;
-    candidate_names.push_back(c_info.name);
-
-    char buf[64];
-    auto git = group_names.find(c_info.group_idx);
-    if (git != group_names.end() && !git->second.empty()) {
-        snprintf(buf, sizeof(buf), "%s_%04u.ssrc", git->second.c_str(), c_info.chunk_id);
-        candidate_names.push_back(buf);
-        snprintf(buf, sizeof(buf), "%s_%u.ssrc", git->second.c_str(), c_info.chunk_id);
-        candidate_names.push_back(buf);
-        snprintf(buf, sizeof(buf), "%s%04u.ssrc", git->second.c_str(), c_info.chunk_id);
-        candidate_names.push_back(buf);
+    size_t read_size = s_info.is_compressed ? s_info.compressed_size : s_info.size;
+    std::vector<uint8_t> buffer(read_size);
+    std::vector<const ChunkInfo*> group_chunks;
+    for (const auto& chunk : chunks) {
+        if (chunk.group_idx == group_idx) {
+            group_chunks.push_back(&chunk);
+        }
     }
-    snprintf(buf, sizeof(buf), "group_%u_%04u.ssrc", c_info.group_idx, c_info.chunk_id);
-    candidate_names.push_back(buf);
-    snprintf(buf, sizeof(buf), "chunk_%04u.ssrc", c_info.chunk_id);
-    candidate_names.push_back(buf);
-    snprintf(buf, sizeof(buf), "chunk_%u.ssrc", c_info.chunk_id);
-    candidate_names.push_back(buf);
-    snprintf(buf, sizeof(buf), "hotfix_%04u.ssrc", c_info.chunk_id);
-    candidate_names.push_back(buf);
-    snprintf(buf, sizeof(buf), "chunk_%04u.ssrc", (unsigned int)c_info.index);
-    candidate_names.push_back(buf);
-    snprintf(buf, sizeof(buf), "chunk_%u.ssrc", (unsigned int)c_info.index);
-    candidate_names.push_back(buf);
+    std::sort(group_chunks.begin(), group_chunks.end(), [](const ChunkInfo* left, const ChunkInfo* right) {
+        return left->global_offset < right->global_offset;
+    });
 
-    std::filesystem::path chunk_path;
-    bool found = false;
-    for (const auto& dir : search_dirs) {
-        if (!std::filesystem::exists(dir)) continue;
-        for (const auto& name : candidate_names) {
-            std::filesystem::path test_path = dir / Core::Utf8ToWString(name);
-            if (std::filesystem::exists(test_path)) {
-                chunk_path = test_path;
-                found = true;
+    uint64_t virtual_offset = global_off;
+    size_t bytes_remaining = read_size;
+    size_t buffer_offset = 0;
+    while (bytes_remaining != 0) {
+        const ChunkInfo* current_chunk = nullptr;
+        for (const ChunkInfo* chunk : group_chunks) {
+            if (virtual_offset >= chunk->global_offset && virtual_offset < chunk->global_offset + chunk->size_bytes) {
+                current_chunk = chunk;
                 break;
             }
         }
-        if (found) break;
-    }
-
-    if (!found) {
-        // Fallback: search directory for any matching .ssrc using exact file size and chunk_id
-        for (const auto& dir : search_dirs) {
-            if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) continue;
-            try {
-                for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-                    if (entry.is_regular_file() && entry.path().extension() == L".ssrc") {
-                        std::error_code ec;
-                        uint64_t file_size = std::filesystem::file_size(entry.path(), ec);
-                        if (!ec && file_size == c_info.compressed_size) {
-                            std::string stem = Core::PathToUtf8(entry.path().stem());
-                            
-                            // Verify that the filename contains the chunk_id as a standalone number
-                            uint32_t current_num = 0;
-                            bool in_num = false;
-                            bool match_found = false;
-                            
-                            for (char c : stem) {
-                                if (c >= '0' && c <= '9') {
-                                    current_num = current_num * 10 + (c - '0');
-                                    in_num = true;
-                                } else {
-                                    if (in_num && current_num == c_info.chunk_id) {
-                                        match_found = true;
-                                        break;
-                                    }
-                                    in_num = false;
-                                    current_num = 0;
-                                }
-                            }
-                            if (in_num && current_num == c_info.chunk_id) {
-                                match_found = true;
-                            }
-                            
-                            if (match_found) {
-                                chunk_path = entry.path();
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch (...) {}
-            if (found) break;
+        if (current_chunk == nullptr) {
+            LogError("Failed to locate chunk for virtual offset " + std::to_string(virtual_offset) + " in file: " + node.full_path);
+            return {};
         }
-    }
 
-    if (!found) {
-        LogError("Failed to locate chunk file for index " + std::to_string(group_idx) + " (" + c_info.name + ") for file: " + node.full_path);
-        return {};
-    }
+        const uint64_t local_offset = virtual_offset - current_chunk->global_offset;
+        const size_t available = static_cast<size_t>(current_chunk->size_bytes - local_offset);
+        const size_t segment_size = (std::min)(bytes_remaining, available);
+        if (current_chunk->physical_path.empty()) {
+            LogError("Failed to locate chunk file for " + current_chunk->name + " and file: " + node.full_path);
+            return {};
+        }
 
-    std::ifstream file(chunk_path, std::ios::binary);
-    if (!file.is_open()) {
-        LogError("Failed to open chunk file: " + Core::PathToUtf8(chunk_path));
-        return {};
-    }
-
-    file.seekg(0, std::ios::end);
-    std::streamsize chunk_file_size = file.tellg();
-    file.seekg(s_info.offset, std::ios::beg);
-    
-    size_t read_size = s_info.is_compressed ? s_info.compressed_size : s_info.size;
-    std::vector<uint8_t> buffer(read_size);
-    if (!file.read(reinterpret_cast<char*>(buffer.data()), read_size)) {
-        LogError("Failed to read data from chunk " + c_info.name + " for file: " + node.full_path + 
-                 " (offset=" + std::to_string(s_info.offset) + ", read_size=" + std::to_string(read_size) + 
-                 ", chunk_file_size=" + std::to_string(chunk_file_size) + ")");
-        return {};
+        std::ifstream file(current_chunk->physical_path, std::ios::binary);
+        if (!file.is_open()) {
+            LogError("Failed to open chunk file: " + Core::WStringToUtf8(current_chunk->physical_path));
+            return {};
+        }
+        file.seekg(static_cast<std::streamoff>(local_offset), std::ios::beg);
+        if (!file.read(reinterpret_cast<char*>(buffer.data() + buffer_offset), static_cast<std::streamsize>(segment_size))) {
+            LogError("Failed to read data from chunk " + current_chunk->name + " for file: " + node.full_path);
+            return {};
+        }
+        virtual_offset += segment_size;
+        buffer_offset += segment_size;
+        bytes_remaining -= segment_size;
     }
 
     if (s_info.is_encrypted) {
@@ -410,10 +430,12 @@ std::vector<uint8_t> SSRArchive::GetFileData(const Core::FileNode& node)
     }
 
     if (s_info.is_compressed) {
+        const bool legacy_frame = NormalizeLegacyZstdFrame(buffer);
         std::vector<uint8_t> decompressed(s_info.size);
         size_t dSize = ZSTD_decompress(decompressed.data(), decompressed.size(), buffer.data(), buffer.size());
         if (ZSTD_isError(dSize)) {
-            LogError("ZSTD decompression failed for " + node.full_path + ": " + ZSTD_getErrorName(dSize));
+            LogError("ZSTD decompression failed for " + node.full_path +
+                     (legacy_frame ? " (legacy frame normalized): " : ": ") + ZSTD_getErrorName(dSize));
             return buffer;
         }
         decompressed.resize(dSize);

@@ -22,6 +22,7 @@ private:
         uint64_t size_bytes;
         uint64_t compressed_size;
         uint64_t global_offset;
+        std::wstring physical_path;
     };
 
     struct SSRAFileInfo {
