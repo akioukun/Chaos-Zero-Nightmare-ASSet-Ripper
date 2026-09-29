@@ -256,7 +256,7 @@ static std::vector<std::string> collect_args_utf8(int argc, char** argv)
 static void print_help()
 {
     std::cout <<
-        "czn-cli - headless extractor for Chaos Zero Nightmare data.pack\n"
+        "ChaosZeroNightmareRipper-CLI - headless extractor for Chaos Zero Nightmare data.pack\n"
         "\n"
         "Usage:\n"
         "  czn-cli --pack <path> --out <dir> --folder <archive/path> [--folder ...] [options]\n"
@@ -291,7 +291,7 @@ static void print_help()
         "  4  none of the requested folders could be extracted\n"
         "\n"
         "Example:\n"
-        "  czn-cli --pack \"C:\\Games\\ChaosZeroNightmare\\bin\\appdata\\cznlive\\data.pack\"\n"
+        "  ChaosZeroNightmareRipper-CLI --pack \"C:\\Games\\ChaosZeroNightmare\\bin\\appdata\\cznlive\\data.pack\"\n"
         "          --out D:\\czn_assets\n"
         "          --folder card --folder story --folder cutin --folder collapse\n";
 }

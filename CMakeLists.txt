@@ -47,6 +47,7 @@ add_library(czn_core OBJECT ${CZN_CORE_SOURCES})
 target_include_directories(czn_core PUBLIC ${CZN_CORE_INCLUDE_DIRS})
 target_link_libraries(czn_core PUBLIC astc-encoder::astcenc-static Threads::Threads)
 
+# GUI
 add_executable(
     ${PROJECT_NAME}
     main.cpp
@@ -81,11 +82,12 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 # Headless CLI
-add_executable(czn-cli cli/main_cli.cpp)
+add_executable(ChaosZeroNightmareRipper-CLI cli/main_cli.cpp)
 
-target_link_libraries(czn-cli PRIVATE czn_core)
+target_link_libraries(ChaosZeroNightmareRipper-CLI PRIVATE czn_core)
 
 if(WIN32)
     # CommandLineToArgvW, used to read the command line as UTF-8
-    target_link_libraries(czn-cli PRIVATE Shell32)
+    target_link_libraries(ChaosZeroNightmareRipper-CLI PRIVATE Shell32)
+    target_sources(ChaosZeroNightmareRipper-CLI PRIVATE "assets/appicon.rc")
 endif()
