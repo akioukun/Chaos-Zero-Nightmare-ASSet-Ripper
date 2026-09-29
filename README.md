@@ -45,6 +45,27 @@ Multiple files and folders can be selected for batch export:
 - **Ctrl + Up / Down Arrow**
 
 
+## CLI
+
+`ChaosZeroNightmareRipper-CLI.exe` ships alongside the GUI and extracts named folders without opening a window, which makes it usable from scripts. It is a standalone binary and needs none of the DLLs the GUI uses.
+
+```bash
+ChaosZeroNightmareRipper-CLI --pack "WhereYouInstalledTheGame\ChaosZeroNightmare\bin\appdata\cznlive\data.pack" --out D:\czn_assets --folder rarity --folder tp_skill --folder select_scene --folder collapse/collapse_illustration
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-p`, `--pack <path>` | `data.pack`, a `manifest.ssra`, or an unpacked directory |
+| `-o`, `--out <dir>` | destination directory, created if missing |
+| `-f`, `--folder <path>` | archive-relative folder or file to extract; repeat for more than one |
+| `--no-png` | keep `.sct` / `.sct2` as-is instead of converting to `.png` |
+| `--no-json` | keep `.db` as-is instead of converting to `.json` |
+| `-v`, `--verbose` | print each extracted file |
+| `-q`, `--quiet` | suppress the progress bar |
+| `-h`, `--help` | show help |
+
+The output preserves the full archive path, so `--out D:\out --folder collapse/collapse_illustration` writes to `D:\out\collapse\collapse_illustration\`. Texture and database conversion are on by default, matching the GUI. A folder that is not in the archive is reported but does not stop the others, and the exit code says what happened: `0` every folder found and extracted, `1` usage error, `2` the pack could not be opened or scanned, `3` some folders were missing or failed, `4` none could be extracted. Errors on individual files are logged and skipped without changing the exit code, so check `czn_ripper.log` to confirm a clean run.
+
 ## Build Instructions
 
 ```bash

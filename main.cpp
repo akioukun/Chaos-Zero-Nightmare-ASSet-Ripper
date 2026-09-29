@@ -28,10 +28,8 @@
 #include "nuklear_sdl_gl3.h"
 
 #include "core/Core.h"
-#include "archive/DataPack.h"
+#include "core/FileTree.h"
 #include "archive/IArchive.h"
-#include "archive/CompositeArchive.h"
-#include "archive/SSRArchive.h"
 #include "parsers/SCTParser.h"
 #include "parsers/DBParser.h"
 #include "parsers/SCSPParser.h"
@@ -47,32 +45,6 @@
 #define DOUBLE_CLICK_TIME_MS 300
 
 using json = nlohmann::ordered_json;
-
-std::unique_ptr<IArchive> CreateArchive(const std::wstring& wpath) {
-    std::filesystem::path p(wpath);
-    if (p.filename() == L"manifest.ssra" || p.extension() == L".ssra") {
-        return std::make_unique<SSRArchive>(wpath);
-    }
-    std::filesystem::path dir = std::filesystem::is_directory(p) ? p : p.parent_path();
-    std::filesystem::path gameres_path = dir / L"gameres";
-    
-    if (std::filesystem::exists(gameres_path) && std::filesystem::is_directory(gameres_path)) {
-        auto composite = std::make_unique<CompositeArchive>(wpath);
-        composite->AddArchive(std::make_unique<DataPack>(wpath));
-        
-        try {
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(gameres_path)) {
-                if (entry.is_regular_file() && entry.path().filename() == L"manifest.ssra") {
-                    composite->AddArchive(std::make_unique<SSRArchive>(entry.path().wstring()));
-                }
-            }
-        } catch (const std::exception& e) {
-            LogError("Error scanning gameres directory: " + std::string(e.what()));
-        }
-        return composite;
-    }
-    return std::make_unique<DataPack>(wpath);
-}
 
 struct FileBrowserState
 {
@@ -256,63 +228,6 @@ static void load_options_from_ini()
     g_state.common.export_sct_as_png = options.exportSctAsPng ? nk_true : nk_false;
     g_state.common.export_db_as_json = options.exportDbAsJson ? nk_true : nk_false;
     g_state.common.enable_open_folder = options.enableOpenFolder ? nk_true : nk_false;
-}
-
-int get_file_count(const Core::FileNode &node)
-{
-    try
-    {
-        if (std::holds_alternative<Core::FileInfo>(node.data))
-            return 1;
-        int count = 0;
-        const auto &folder = std::get<Core::FolderInfo>(node.data);
-        for (const auto &child : folder.children)
-        {
-            count += get_file_count(child);
-        }
-        return count;
-    }
-    catch (...)
-    {
-        return 0;
-    }
-}
-
-uint64_t get_folder_size(const Core::FileNode &node)
-{
-    try
-    {
-        if (std::holds_alternative<Core::FileInfo>(node.data))
-        {
-            return std::get<Core::FileInfo>(node.data).size;
-        }
-        uint64_t size = 0;
-        const auto &folder = std::get<Core::FolderInfo>(node.data);
-        for (const auto &child : folder.children)
-        {
-            size += get_folder_size(child);
-        }
-        return size;
-    }
-    catch (...)
-    {
-        return 0;
-    }
-}
-
-std::string format_size(uint64_t bytes)
-{
-    const char *units[] = {"B", "KB", "MB", "GB"};
-    int unit = 0;
-    double size = (double)bytes;
-    while (size >= 1024.0 && unit < 3)
-    {
-        size /= 1024.0;
-        unit++;
-    }
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%.2f %s", size, units[unit]);
-    return buffer;
 }
 
 bool matches_search(const Core::FileNode &node, const std::string &query)
@@ -1550,22 +1465,6 @@ std::string diff_display_name(const DiffNode &node)
     return diff_status_label(node.status) + node.name;
 }
 
-const Core::FileNode* find_file_node_by_path(const Core::FileNode& current, const std::string& path)
-{
-    if (current.full_path == path)
-        return &current;
-
-    if (std::holds_alternative<Core::FolderInfo>(current.data))
-    {
-        for (const auto& child : std::get<Core::FolderInfo>(current.data).children)
-        {
-            if (const Core::FileNode* found = find_file_node_by_path(child, path))
-                return found;
-        }
-    }
-    return nullptr;
-}
-
 void handle_diff_node_click(const DiffNode *node, bool is_folder)
 {
     bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
@@ -1592,7 +1491,7 @@ void handle_diff_node_click(const DiffNode *node, bool is_folder)
         
         if (!is_folder && g_state.browser.data_pack)
         {
-            const Core::FileNode* file_node = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), node->full_path);
+            const Core::FileNode* file_node = Core::FindNodeByPath(g_state.browser.data_pack->GetFileTree(), node->full_path);
             if (file_node)
             {
                 load_image_preview(*file_node);
@@ -1631,7 +1530,7 @@ void handle_diff_node_click(const DiffNode *node, bool is_folder)
 
         if (!is_folder && g_state.browser.data_pack)
         {
-            const Core::FileNode* file_node = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), node->full_path);
+            const Core::FileNode* file_node = Core::FindNodeByPath(g_state.browser.data_pack->GetFileTree(), node->full_path);
             if (file_node)
             {
                 load_image_preview(*file_node);
@@ -1789,7 +1688,7 @@ void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
 
             nk_layout_row_push(ctx, 200.0f);
             int file_count = get_diff_file_count(node);
-            std::string info = std::to_string(file_count) + " items | " + format_size(get_diff_folder_size(node));
+            std::string info = std::to_string(file_count) + " items | " + Core::FormatSize(get_diff_folder_size(node));
             nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
 
             nk_layout_row_end(ctx);
@@ -1850,7 +1749,7 @@ void draw_diff_node(nk_context *ctx, const DiffNode &node, int depth = 0)
             }
 
             nk_layout_row_push(ctx, 200.0f);
-            std::string size_str = format_size(node.size) + " | " + node.format;
+            std::string size_str = Core::FormatSize(node.size) + " | " + node.format;
             nk_label_colored(ctx, size_str.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
 
             nk_layout_row_end(ctx);
@@ -1928,8 +1827,10 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
             }
 
             nk_layout_row_push(ctx, 200.0f);
-            int file_count = get_file_count(node);
-            std::string info = std::to_string(file_count) + " items | " + format_size(get_folder_size(node));
+            uint64_t bytes = 0;
+            uint32_t files = 0;
+            Core::NodeStats(node, bytes, files);
+            const std::string info = std::to_string(files) + " items | " + Core::FormatSize(bytes);
             nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
 
             nk_layout_row_end(ctx);
@@ -1987,7 +1888,7 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
             }
 
             nk_layout_row_push(ctx, 200.0f);
-            std::string size_str = format_size(file_info.size) + " | " + file_info.format;
+            std::string size_str = Core::FormatSize(file_info.size) + " | " + file_info.format;
             nk_label_colored(ctx, size_str.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
 
             nk_layout_row_end(ctx);
@@ -2470,7 +2371,7 @@ int main(int argc, char *argv[])
             if (g_state.tasks.status.find("Scanning") != std::string::npos)
             {
                 g_state.tasks.scan_complete = true;
-                g_state.tasks.status = "Scan complete. " + std::to_string(get_file_count(g_state.browser.data_pack->GetFileTree())) + " files found.";
+                g_state.tasks.status = "Scan complete. " + std::to_string(Core::NodeFileCount(g_state.browser.data_pack->GetFileTree())) + " files found.";
             }
             else if (g_state.tasks.status.find("Extracting") != std::string::npos)
             {
@@ -2911,7 +2812,7 @@ int main(int argc, char *argv[])
                         g_state.diff.selected_nodes.clear();
                         g_state.diff.selected_node = nullptr;
 
-                        g_state.browser.data_pack = CreateArchive(wpath);
+                        g_state.browser.data_pack = IArchive::Create(wpath);
                         if (g_state.browser.data_pack->GetType() == IArchive::PackType::Unknown)
                         {
                             g_state.tasks.status = "Error: Invalid or unknown file.";
@@ -2983,7 +2884,7 @@ int main(int argc, char *argv[])
                             g_state.diff.selected_nodes.clear();
                             g_state.diff.selected_node = nullptr;
 
-                            g_state.browser.data_pack = CreateArchive(wpath);
+                            g_state.browser.data_pack = IArchive::Create(wpath);
                             if (g_state.browser.data_pack->GetType() == IArchive::PackType::Unknown)
                             {
                                 g_state.tasks.status = "Error: Invalid or unknown folder.";
@@ -3151,13 +3052,13 @@ int main(int argc, char *argv[])
                             {
                                 if (n)
                                 {
-                                    if (const Core::FileNode* fn = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), n->full_path))
+                                    if (const Core::FileNode* fn = Core::FindNodeByPath(g_state.browser.data_pack->GetFileTree(), n->full_path))
                                         nodes_to_extract.push_back(fn);
                                 }
                             }
                             if (nodes_to_extract.empty() && g_state.diff.selected_node)
                             {
-                                if (const Core::FileNode* fn = find_file_node_by_path(g_state.browser.data_pack->GetFileTree(), g_state.diff.selected_node->full_path))
+                                if (const Core::FileNode* fn = Core::FindNodeByPath(g_state.browser.data_pack->GetFileTree(), g_state.diff.selected_node->full_path))
                                     nodes_to_extract.push_back(fn);
                             }
                         }
@@ -3378,7 +3279,7 @@ int main(int argc, char *argv[])
                         nk_button_label_styled(ctx, &button_style, g_state.browser.data_pack->GetFileTree().name.c_str());
 
                         nk_layout_row_push(ctx, 200.0f);
-                        std::string info = "0 items | " + format_size(0);
+                        std::string info = "0 items | " + Core::FormatSize(0);
                         nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
                         nk_layout_row_end(ctx);
                     }
@@ -3455,7 +3356,7 @@ int main(int argc, char *argv[])
                             {
                                 const auto &info = std::get<Core::FileInfo>(g_state.preview.preview_node->data);
                                 nk_layout_row_dynamic(ctx, 25, 1);
-                                std::string size_str = "Size: " + format_size(info.size);
+                                std::string size_str = "Size: " + Core::FormatSize(info.size);
                                 nk_label_colored(ctx, size_str.c_str(), NK_TEXT_CENTERED, nk_rgb(180, 180, 180));
                             }
 
