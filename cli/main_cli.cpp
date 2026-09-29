@@ -27,7 +27,6 @@
 #include "core/FileTree.h"
 #include "core/Logger.h"
 #include "archive/IArchive.h"
-#include "archive/ArchiveFactory.h"
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -525,7 +524,7 @@ int main(int argc, char** argv)
     LogInfo("CLI run started for pack: " + options.pack);
 
     std::unique_ptr<IArchive> archive;
-    if (!run_guarded([&] { archive = CreateArchive(pack_path.wstring()); }) || !archive)
+    if (!run_guarded([&] { archive = IArchive::Create(pack_path.wstring()); }) || !archive)
     {
         std::cerr << "error: could not open pack: " << options.pack << "\n";
         return CLI_EXIT_PACK_FAILED;

@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <memory>
 
 class IArchive {
 public:
@@ -15,6 +16,13 @@ public:
     virtual std::wstring GetPackPath() const = 0;
     virtual uint32_t GetParsedFileCount() const = 0;
     virtual uint64_t GetParsedTotalSize() const = 0;
+
+    /**
+     * Factory function that creates the appropriate IArchive implementation for the given path.
+     * Picks SSRArchive for .ssra / manifest.ssra, CompositeArchive if a gameres directory exists,
+     * or DataPack otherwise.
+     */
+    static std::unique_ptr<IArchive> Create(const std::wstring& wpath);
 
     virtual void Scan(std::atomic<float>& progress) = 0;
     virtual void Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png = false, bool convert_db_to_json = false) = 0;

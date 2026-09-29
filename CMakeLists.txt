@@ -21,9 +21,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 file(GLOB SPINE_CPP_SOURCES "libs/spine-cpp/src/spine/*.cpp")
 
-# Sources shared by the GUI and the headless CLI. Nothing here depends on SDL2, OpenGL, or spine-cpp, which is what lets czn-cli link without them.
+# Sources shared by the GUI and the headless CLI
 set(CZN_CORE_SOURCES
-    archive/ArchiveFactory.cpp
     archive/DataPack.cpp
     archive/ArchiveBase.cpp
     archive/SSRArchive.cpp
@@ -81,12 +80,12 @@ target_link_libraries(${PROJECT_NAME}
     Threads::Threads
 )
 
-# Headless CLI. Deliberately links none of SDL2, SDL2_image, GLEW, OpenGL, or spine-cpp.
+# Headless CLI
 add_executable(czn-cli cli/main_cli.cpp)
 
 target_link_libraries(czn-cli PRIVATE czn_core)
 
 if(WIN32)
-    # CommandLineToArgvW, used to read the command line as UTF-8.
+    # CommandLineToArgvW, used to read the command line as UTF-8
     target_link_libraries(czn-cli PRIVATE Shell32)
 endif()

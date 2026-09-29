@@ -30,7 +30,6 @@
 #include "core/Core.h"
 #include "core/FileTree.h"
 #include "archive/IArchive.h"
-#include "archive/ArchiveFactory.h"
 #include "parsers/SCTParser.h"
 #include "parsers/DBParser.h"
 #include "parsers/SCSPParser.h"
@@ -2811,7 +2810,7 @@ int main(int argc, char *argv[])
                         g_state.diff.selected_nodes.clear();
                         g_state.diff.selected_node = nullptr;
 
-                        g_state.browser.data_pack = CreateArchive(wpath);
+                        g_state.browser.data_pack = IArchive::Create(wpath);
                         if (g_state.browser.data_pack->GetType() == IArchive::PackType::Unknown)
                         {
                             g_state.tasks.status = "Error: Invalid or unknown file.";
@@ -2883,7 +2882,7 @@ int main(int argc, char *argv[])
                             g_state.diff.selected_nodes.clear();
                             g_state.diff.selected_node = nullptr;
 
-                            g_state.browser.data_pack = CreateArchive(wpath);
+                            g_state.browser.data_pack = IArchive::Create(wpath);
                             if (g_state.browser.data_pack->GetType() == IArchive::PackType::Unknown)
                             {
                                 g_state.tasks.status = "Error: Invalid or unknown folder.";
