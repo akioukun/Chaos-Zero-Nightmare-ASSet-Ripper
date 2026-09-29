@@ -47,10 +47,10 @@ Multiple files and folders can be selected for batch export:
 
 ## CLI
 
-`czn-cli.exe` ships alongside the GUI and extracts named folders without opening a window, which makes it usable from scripts. It is a standalone binary and needs none of the DLLs the GUI uses.
+`ChaosZeroNightmareRipper-CLI.exe` ships alongside the GUI and extracts named folders without opening a window, which makes it usable from scripts. It is a standalone binary and needs none of the DLLs the GUI uses.
 
 ```bash
-czn-cli --pack "WhereYouInstalledTheGame\ChaosZeroNightmare\bin\appdata\cznlive\data.pack" --out D:\czn_assets --folder rarity --folder tp_skill --folder select_scene --folder collapse/collapse_illustration
+ChaosZeroNightmareRipper-CLI --pack "WhereYouInstalledTheGame\ChaosZeroNightmare\bin\appdata\cznlive\data.pack" --out D:\czn_assets --folder rarity --folder tp_skill --folder select_scene --folder collapse/collapse_illustration
 ```
 
 | Flag | Meaning |
