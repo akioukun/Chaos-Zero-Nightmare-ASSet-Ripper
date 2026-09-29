@@ -605,7 +605,10 @@ int main(int argc, char** argv)
             {
                 const float local = std::min(1.0f, std::max(0.0f, progress.load()));
                 const uint64_t overall_done = bytes_done + static_cast<uint64_t>(local * static_cast<float>(folder.bytes));
-                return "total " + std::to_string(static_cast<int>(100.0 * static_cast<double>(overall_done) / static_cast<double>(bytes_total))) + "%";
+                const int total_percent = (bytes_total > 0)
+                    ? static_cast<int>(100.0 * static_cast<double>(overall_done) / static_cast<double>(bytes_total))
+                    : 100;
+                return "total " + std::to_string(total_percent) + "%";
             };
             auto work = [&] { archive->Extract(*folder.node, out_base.wstring(), progress, options.convert_sct_to_png, options.convert_db_to_json); };
             ok = run_with_progress("  Extracting", progress, suffix_fn, work);

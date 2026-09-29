@@ -1827,8 +1827,10 @@ void draw_file_node(nk_context *ctx, const Core::FileNode &node, int depth = 0)
             }
 
             nk_layout_row_push(ctx, 200.0f);
-            uint32_t file_count = Core::NodeFileCount(node);
-            std::string info = std::to_string(file_count) + " items | " + Core::FormatSize(Core::NodeTotalBytes(node));
+            uint64_t bytes = 0;
+            uint32_t files = 0;
+            Core::NodeStats(node, bytes, files);
+            const std::string info = std::to_string(files) + " items | " + Core::FormatSize(bytes);
             nk_label_colored(ctx, info.c_str(), NK_TEXT_LEFT, nk_rgb(150, 150, 150));
 
             nk_layout_row_end(ctx);
