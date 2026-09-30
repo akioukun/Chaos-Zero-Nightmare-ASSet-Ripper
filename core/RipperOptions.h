@@ -51,8 +51,6 @@ namespace RipperOptionsInternal
     }
 }
 
-// Writing the whole file each time means a caller that only owns some of the fields must load the current options first, change what it owns, and save
-// that. Default-constructing a RipperOptions and saving it would reset every field the caller did not set.
 inline void SaveRipperOptions(const RipperOptions &options, const std::string &iniPath = "czn_ripper.ini")
 {
     std::ofstream out(iniPath, std::ios::trunc);

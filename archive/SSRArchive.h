@@ -3,11 +3,10 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <fstream>
 
 class SSRArchive : public ArchiveBase {
 public:
-    SSRArchive(const std::wstring& manifest_path);
+    explicit SSRArchive(const std::wstring& manifest_path);
     ~SSRArchive() override = default;
 
     void Scan(std::atomic<float>& progress) override;
@@ -41,5 +40,5 @@ private:
     std::map<uint16_t, std::string> group_names;
     std::map<std::string, SSRAFileInfo> file_map;
     
-    std::string GetStringFromTable(const std::vector<uint8_t>& string_table, uint64_t offset) const;
+    static std::string GetStringFromTable(const std::vector<uint8_t>& string_table, uint64_t offset) ;
 };

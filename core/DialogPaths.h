@@ -7,8 +7,6 @@
 #include <system_error>
 #include <vector>
 
-// Keeps each kind of file dialog opening where the user last left it. The folders are stored in the same ini as the rest of the options so they survive
-// a restart. Call the three wrappers at the bottom rather than pfd directly, so seeding a dialog and recording its result stay one step.
 namespace DialogPaths
 {
     /** Which remembered location a file dialog should start from. */
@@ -52,7 +50,7 @@ namespace DialogPaths
          * @param slot The dialog kind about to be shown.
          * @returns The directory, or an empty string when there is nothing usable to start from.
          */
-        inline std::string rememberedDir(Slot slot)
+        inline std::string rememberedDir(const Slot slot)
         {
             RipperOptions options = LoadRipperOptions();
             const std::string stored = slotDir(options, slot);
@@ -61,8 +59,7 @@ namespace DialogPaths
                 return "";
             }
 
-            std::error_code ec;
-            if (!std::filesystem::is_directory(std::filesystem::path(Core::Utf8ToWString(stored)), ec))
+            if (std::error_code ec; !std::filesystem::is_directory(std::filesystem::path(Core::Utf8ToWString(stored)), ec))
             {
                 return "";
             }
@@ -155,8 +152,7 @@ namespace DialogPaths
                 return;
             }
 
-            const std::filesystem::path parent = std::filesystem::path(Core::Utf8ToWString(path)).parent_path();
-            if (!parent.empty())
+            if (const std::filesystem::path parent = std::filesystem::path(Core::Utf8ToWString(path)).parent_path(); !parent.empty())
             {
                 rememberDir(slot, Core::PathToUtf8(parent));
             }
@@ -188,7 +184,7 @@ namespace DialogPaths
      * @param filters Filter pairs in the portable-file-dialogs form.
      * @returns The chosen path, or an empty string when the dialog was cancelled.
      */
-    inline std::string OpenFile(Slot slot, const std::string &title, const std::vector<std::string> &filters)
+    inline std::string OpenFile(const Slot slot, const std::string &title, const std::vector<std::string> &filters)
     {
         // Passed straight through: portable-file-dialogs skips the initial directory when this is empty, which lets Windows pick.
         const std::string remembered = Internal::rememberedDir(slot);
@@ -210,10 +206,10 @@ namespace DialogPaths
      * @param title Dialog title.
      * @returns The chosen folder, or an empty string when the dialog was cancelled.
      */
-    inline std::string SelectFolder(Slot slot, const std::string &title)
+    inline std::string SelectFolder(const Slot slot, const std::string &title)
     {
-        const Internal::FolderSeed seed = Internal::folderSeed(Internal::rememberedDir(slot));
-        pfd::select_folder dialog(title, seed.path, seed.options);
+        const auto [path, options] = Internal::folderSeed(Internal::rememberedDir(slot));
+        pfd::select_folder dialog(title, path, options);
         const std::string picked = dialog.result();
         Internal::rememberDir(slot, picked);
         return picked;

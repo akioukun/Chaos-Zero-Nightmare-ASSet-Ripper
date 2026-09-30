@@ -6,7 +6,6 @@
 #include <map>
 #include <set>
 #include <vector>
-#include <memory>
 
 class IArchive;
 struct SpineEntry;
@@ -21,7 +20,7 @@ public:
     void clearTextures();
 
     struct TexInfo { GLuint id; int width; int height; };
-    const std::map<std::string, TexInfo>& getTextures() const { return textures; }
+    [[nodiscard]] const std::map<std::string, TexInfo>& getTextures() const { return textures; }
 
 private:
     std::map<std::string, TexInfo> textures;
@@ -36,9 +35,7 @@ public:
     void init();
     void dispose();
     void begin(float projMatrix[16], bool pma = true);
-    void addTriangles(GLuint texture, const float* vertices, int vertexCount,
-                      const unsigned short* indices, int indexCount,
-                      spine::BlendMode blendMode);
+    void addTriangles(GLuint texture, const float* vertices, int vertexCount, const unsigned short* indices, int indexCount, spine::BlendMode blendMode);
     void end();
 
 private:
@@ -80,50 +77,50 @@ public:
     void update(float deltaTime);
     void render(int viewportWidth, int viewportHeight);
 
-    GLuint getFBOTexture() const { return fboTexture; }
-    bool isLoaded() const { return skeleton != nullptr; }
+    [[nodiscard]] GLuint getFBOTexture() const { return fboTexture; }
+    [[nodiscard]] bool isLoaded() const { return skeleton != nullptr; }
 
     // Animation/skin
-    std::vector<std::string> getAnimationNames() const;
-    std::vector<std::string> getSkinNames() const;
+    [[nodiscard]] std::vector<std::string> getAnimationNames() const;
+    [[nodiscard]] std::vector<std::string> getSkinNames() const;
     void setAnimation(const std::string& name, bool loop = true);
-    void setSkin(const std::string& name);
+    void setSkin(const std::string& name) const;
 
     // Playback
     void setPlaybackSpeed(float speed) { playbackSpeed = speed; }
     void setPlaying(bool p) { playing = p; }
-    bool isPlaying() const { return playing; }
-    float getPlaybackSpeed() const { return playbackSpeed; }
+    [[nodiscard]] bool isPlaying() const { return playing; }
+    [[nodiscard]] float getPlaybackSpeed() const { return playbackSpeed; }
 
     // View
-    void setFlipX(bool flip) { flipX = flip; }
-    void setFlipY(bool flip) { flipY = flip; }
+    void setFlipX(const bool flip) { flipX = flip; }
+    void setFlipY(const bool flip) { flipY = flip; }
 
     // Blend config
-    void setUsePMA(bool pma) { usePMA = pma; }
-    bool getUsePMA() const { return usePMA; }
+    void setUsePMA(const bool pma) { usePMA = pma; }
+    [[nodiscard]] bool getUsePMA() const { return usePMA; }
     void setPremultiplyTextures(bool pm) { premultiplyTextures = pm; reloadTextures = true; }
-    bool getPremultiplyTextures() const { return premultiplyTextures; }
-    bool needsTextureReload() const { return reloadTextures; }
+    [[nodiscard]] bool getPremultiplyTextures() const { return premultiplyTextures; }
+    [[nodiscard]] bool needsTextureReload() const { return reloadTextures; }
 
     // Autoplay
     void nextAnimation();
-    int getCurrentAnimIndex() const { return currentAnimIndex; }
+    [[nodiscard]] int getCurrentAnimIndex() const { return currentAnimIndex; }
     void setAutoplayNext(bool a) { autoplayNext = a; }
-    bool getAutoplayNext() const { return autoplayNext; }
-    bool getFlipX() const { return flipX; }
-    bool getFlipY() const { return flipY; }
+    [[nodiscard]] bool getAutoplayNext() const { return autoplayNext; }
+    [[nodiscard]] bool getFlipX() const { return flipX; }
+    [[nodiscard]] bool getFlipY() const { return flipY; }
     void setZoom(float z) { zoom = z; if (zoom < 0.1f) zoom = 0.1f; if (zoom > 10.0f) zoom = 10.0f; }
-    float getZoom() const { return zoom; }
-    void zoomBy(float factor) { zoom *= factor; if (zoom < 0.1f) zoom = 0.1f; if (zoom > 10.0f) zoom = 10.0f; }
-    void pan(float dx, float dy) { panX += dx; panY += dy; }
+    [[nodiscard]] float getZoom() const { return zoom; }
+    void zoomBy(const float factor) { zoom *= factor; if (zoom < 0.1f) zoom = 0.1f; if (zoom > 10.0f) zoom = 10.0f; }
+    void pan(const float dx, const float dy) { panX += dx; panY += dy; }
     void resetView() { zoom = 1.0f; panX = 0; panY = 0; }
-    float getPanX() const { return panX; }
-    float getPanY() const { return panY; }
-    std::string getError() const { return errorMsg; }
+    [[nodiscard]] float getPanX() const { return panX; }
+    [[nodiscard]] float getPanY() const { return panY; }
+    [[nodiscard]] std::string getError() const { return errorMsg; }
 
     // Viewport background color
-    void setBgColor(float r, float g, float b) { bgR = r; bgG = g; bgB = b; }
+    void setBgColor(const float r, const float g, const float b) { bgR = r; bgG = g; bgB = b; }
     void getBgColor(float& r, float& g, float& b) const { r = bgR; g = bgG; b = bgB; }
 
     // Bone editing
@@ -140,14 +137,14 @@ public:
         bool hasOverride;
         bool hidden;
     };
-    std::vector<BoneInfo> getBoneList() const;
+    [[nodiscard]] std::vector<BoneInfo> getBoneList() const;
     void setBoneOverride(const std::string& boneName, const BoneOverride& ovr);
     void resetBone(const std::string& boneName);
     void resetBoneEdits();
-    bool hasBoneOverrides() const { return !boneOverrides.empty(); }
-    const std::map<std::string, BoneOverride>& getBoneOverrides() const { return boneOverrides; }
+    [[nodiscard]] bool hasBoneOverrides() const { return !boneOverrides.empty(); }
+    [[nodiscard]] const std::map<std::string, BoneOverride>& getBoneOverrides() const { return boneOverrides; }
     void toggleBoneHidden(const std::string& boneName);
-    bool isBoneHidden(const std::string& boneName) const;
+    [[nodiscard]] bool isBoneHidden(const std::string& boneName) const;
 
     // Hit testing — returns bone name or empty string
     std::string hitTestBone(float screenX, float screenY, int vpW, int vpH);
@@ -156,28 +153,28 @@ public:
     // Transform gizmo
     enum class GizmoHandle { None, Move, ScaleTL, ScaleTR, ScaleBL, ScaleBR, Rotate };
     struct GizmoState {
-        float bboxMinX, bboxMinY, bboxMaxX, bboxMaxY; // world-space bounding box
+        float bboxMinX{}, bboxMinY{}, bboxMaxX{}, bboxMaxY{}; // world-space bounding box
         bool valid = false;
     };
-    GizmoState getSelectedBoneGizmo() const;
-    GizmoHandle hitTestGizmo(float screenX, float screenY, int vpW, int vpH) const;
+    [[nodiscard]] GizmoState getSelectedBoneGizmo() const;
+    [[nodiscard]] GizmoHandle hitTestGizmo(float screenX, float screenY, int vpW, int vpH) const;
 
     // Texture info and swap
     struct TextureInfo { std::string name; int width; int height; GLuint glId; };
-    std::vector<TextureInfo> getTextureList() const;
+    [[nodiscard]] std::vector<TextureInfo> getTextureList() const;
     bool swapTexture(const std::string& pageName, const std::string& pngPath);
     void resetTextureSwaps();
-    bool hasTextureSwaps() const { return !textureSwaps.empty(); }
+    [[nodiscard]] bool hasTextureSwaps() const { return !textureSwaps.empty(); }
 
     // Export modified JSON
-    std::string getModifiedSkeletonJson() const;
+    [[nodiscard]] std::string getModifiedSkeletonJson() const;
 
 private:
     void ensureFBO(int width, int height);
     void cleanupFBO();
     GLuint loadTextureFromRGBA(const unsigned char* data, int width, int height);
     void computeStableBounds();
-    void screenToWorld(float sx, float sy, int vpW, int vpH, float& wx, float& wy);
+    void screenToWorld(float sx, float sy, int vpW, int vpH, float& wx, float& wy) const;
     void applyBoneOverrides();
 
     // Spine objects

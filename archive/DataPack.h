@@ -9,7 +9,7 @@
 
 class DataPack : public ArchiveBase {
 public:
-    DataPack(const std::wstring& path);
+    explicit DataPack(const std::wstring& path);
     ~DataPack() override;
     DataPack(const DataPack&) = delete;
     DataPack& operator=(const DataPack&) = delete;
@@ -27,7 +27,7 @@ private:
 
     struct PackPart {
         HANDLE       hFile = INVALID_HANDLE_VALUE;
-        HANDLE       hMapFile = NULL;
+        HANDLE       hMapFile = nullptr;
         uint64_t     fileSize = 0;
         SlidingView  view;
     };
@@ -41,8 +41,8 @@ private:
     void ScanEncrypted(std::atomic<float>& progress);
     void ScanDecrypted(std::atomic<float>& progress);
     void ScanLocalDirectory(std::atomic<float>& progress);
-    
-    std::vector<std::wstring> FindPackParts(const std::wstring& basePath);
+
+    static std::vector<std::wstring> FindPackParts(const std::wstring& basePath);
     bool LoadPackPart(const std::wstring& path);
 
     bool EnsureWindow(PackPart& part, uint64_t offset, size_t needed) const;

@@ -15,7 +15,7 @@
 
 #include "nuklear.h"
 
-void draw_toolbar(nk_context *ctx, int window_width, bool &scroll_to_selected)
+void draw_toolbar(nk_context *ctx)
 {
     bool pack_loaded = (g_state.browser.data_pack != nullptr);
     bool tree_scanned = pack_loaded && g_state.tasks.scan_complete.load();
@@ -177,7 +177,7 @@ void draw_toolbar(nk_context *ctx, int window_width, bool &scroll_to_selected)
         }
         else
         {
-            activate_diff_viewer();
+            set_diff_viewer_mode();
         }
     }
     else if (!tree_scanned || g_state.tasks.running)

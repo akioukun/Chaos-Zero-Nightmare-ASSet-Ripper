@@ -1,6 +1,5 @@
 #include "SCSPParser.h"
 #include "json.hpp"
-#include <cstring>
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
@@ -11,19 +10,27 @@ using json = nlohmann::ordered_json;
 namespace
 {
     struct Header {
-        uint32_t string_offset;
-        uint32_t string_length;
-        uint32_t hdr_version;
-        float width;
-        float height;
+        uint32_t string_offset{};
+        uint32_t string_length{};
+        uint32_t hdr_version{};
+        float width{};
+        float height{};
         std::string hash;
         std::string version;
         std::string images_path;
         std::string audio_path;
     };
 
+    struct AttachmentMeta
+    {
+        bool weighted{};
+        std::vector<float> setup;
+    };
+
+    using AttachmentMetaMap = std::map<std::tuple<std::string, int, std::string>, AttachmentMeta>;
+
     template <typename T>
-    T read_le(const uint8_t *buf, size_t offset)
+    T read_le(const uint8_t *buf, const size_t offset)
     {
         T val;
         std::memcpy(&val, buf + offset, sizeof(T));
@@ -42,43 +49,122 @@ namespace
         return std::string(reinterpret_cast<const char *>(buf + start), len);
     }
 
-    std::string rgba_to_hex(float r, float g, float b, float a)
+    std::vector<float> read_f32_array(const uint8_t *buf, size_t buf_size, size_t &pos, int count)
     {
-        auto clamp = [](float x)
+        std::vector<float> arr;
+        for (int i = 0; i < count; i++)
+        {
+            if (pos + 4 > buf_size)
+                break;
+            arr.push_back(read_le<float>(buf, pos));
+            pos += 4;
+        }
+        return arr;
+    }
+
+    double round_float(const double value, const int decimals = 6)
+    {
+        if (const double rounded = std::round(value); std::abs(value - rounded) < 1e-5)
+        {
+            return rounded;
+        }
+        const double multiplier = std::pow(10.0, decimals);
+        return std::round(value * multiplier) / multiplier;
+    }
+
+    std::string rgba_to_hex(const float r, const float g, const float b, const float a)
+    {
+        auto clamp = [](const float x)
         { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); };
-        int R = (int)std::round(clamp(r) * 255.0f);
-        int G = (int)std::round(clamp(g) * 255.0f);
-        int B = (int)std::round(clamp(b) * 255.0f);
-        int A = (int)std::round(clamp(a) * 255.0f);
+        const int R = static_cast<int>(std::round(clamp(r) * 255.0f));
+        const int G = static_cast<int>(std::round(clamp(g) * 255.0f));
+        const int B = static_cast<int>(std::round(clamp(b) * 255.0f));
+        const int A = static_cast<int>(std::round(clamp(a) * 255.0f));
 
         char hex[10];
         snprintf(hex, sizeof(hex), "%02X%02X%02X%02X", R, G, B, A);
         return std::string(hex);
     }
 
-    std::string rgb_to_hex(float r, float g, float b)
+    std::string rgb_to_hex(const float r, const float g, const float b)
     {
-        auto clamp = [](float x)
+        auto clamp = [](const float x)
         { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); };
-        int R = (int)std::round(clamp(r) * 255.0f);
-        int G = (int)std::round(clamp(g) * 255.0f);
-        int B = (int)std::round(clamp(b) * 255.0f);
+        const int R = static_cast<int>(std::round(clamp(r) * 255.0f));
+        const int G = static_cast<int>(std::round(clamp(g) * 255.0f));
+        const int B = static_cast<int>(std::round(clamp(b) * 255.0f));
 
         char hex[10];
         snprintf(hex, sizeof(hex), "%02X%02X%02X", R, G, B);
         return std::string(hex);
     }
 
-    struct AttachmentMeta
+    bool bezier_from_spine_block(const std::vector<float> &block, float &cx1, float &cy1, float &cx2, float &cy2)
     {
-        bool weighted;
-        std::vector<float> setup;
-    };
+        if (block.size() < 19)
+            return false;
 
-    using AttachmentMetaMap = std::map<std::tuple<std::string, int, std::string>, AttachmentMeta>;
+        const float x0 = block[1];
+        const float y0 = block[2];
+        const float x1 = block[3], y1 = block[4];
+        const float x2 = block[5], y2 = block[6];
 
-    void ParseAssignVertexAttachment(const uint8_t *buf, size_t buf_size, size_t &pos,
-                                     size_t strings_base, size_t strings_end,
+        float dfx = x0;
+        const float ddfx = x1 - 2.0f * x0;
+        const float dddfx = x2 - 3.0f * x1 + 3.0f * x0;
+        float dfy = y0;
+        const float ddfy = y1 - 2.0f * y0;
+        const float dddfy = y2 - 3.0f * y1 + 3.0f * y0;
+
+        const float h = 1.0f / 10.0f;
+        const float A = 3.0f * h * h;
+        const float B = 6.0f * h * h * h;
+
+        const float Ux = (dddfx / B - 1.0f) / 3.0f;
+        const float Vx = (ddfx - dddfx) / (2.0f * A);
+        cx1 = -Vx - Ux;
+        cx2 = -Vx - 2.0f * Ux;
+
+        const float Uy = (dddfy / B - 1.0f) / 3.0f;
+        const float Vy = (ddfy - dddfy) / (2.0f * A);
+        cy1 = -Vy - Uy;
+        cy2 = -Vy - 2.0f * Uy;
+
+        auto clamp = [](const float v)
+        { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+        cx1 = clamp(cx1);
+        cy1 = clamp(cy1);
+        cx2 = clamp(cx2);
+        cy2 = clamp(cy2);
+
+        return true;
+    }
+
+    void add_curve(const int i, const std::vector<float> &curves, json &frame)
+    {
+        const size_t start = i * 19;
+        if (const size_t end = start + 19; end <= curves.size())
+        {
+            if (const std::vector b(curves.begin() + start, curves.begin() + end); b[0] == 1.0f)
+            {
+                frame["curve"] = "stepped";
+            }
+            else if (b[0] == 2.0f)
+            {
+                float cy1, cx2, cy2;
+                if (float cx1; bezier_from_spine_block(b, cx1, cy1, cx2, cy2))
+                {
+                    frame["curve"] = round_float(cx1);
+                    frame["c2"] = round_float(cy1);
+                    frame["c3"] = round_float(cx2);
+                    frame["c4"] = round_float(cy2);
+                }
+            }
+        }
+    }
+
+    void ParseAssignVertexAttachment(const uint8_t *buf, const size_t buf_size, size_t &pos,
+                                     const size_t strings_base, const size_t strings_end,
                                      std::vector<int16_t> &out_bones,
                                      std::vector<float> &out_verts,
                                      uint16_t &out_vcount,
@@ -88,7 +174,7 @@ namespace
         out_world_vertices_len = 0;
         if (pos + 2 > buf_size)
             return;
-        uint16_t bcount = read_le<uint16_t>(buf, pos);
+        const auto bcount = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         out_bones.clear();
@@ -116,10 +202,10 @@ namespace
 
         if (pos + 8 > buf_size)
             return;
-        uint32_t world_vertices_len = read_le<uint32_t>(buf, pos);
+        const auto world_vertices_len = read_le<uint32_t>(buf, pos);
         pos += 4;
         out_world_vertices_len = world_vertices_len;
-        uint32_t path_off = read_le<uint32_t>(buf, pos);
+        const auto path_off = read_le<uint32_t>(buf, pos);
         pos += 4;
 
         out_path = "";
@@ -129,102 +215,8 @@ namespace
         }
     }
 
-    std::vector<float> read_f32_array(const uint8_t *buf, size_t buf_size, size_t &pos, int count)
-    {
-        std::vector<float> arr;
-        for (int i = 0; i < count; i++)
-        {
-            if (pos + 4 > buf_size)
-                break;
-            arr.push_back(read_le<float>(buf, pos));
-            pos += 4;
-        }
-        return arr;
-    }
 
-    bool bezier_from_spine_block(const std::vector<float> &block,
-                                 float &cx1, float &cy1, float &cx2, float &cy2)
-    {
-        if (block.size() < 19)
-            return false;
-
-        float x0 = block[1], y0 = block[2];
-        float x1 = block[3], y1 = block[4];
-        float x2 = block[5], y2 = block[6];
-
-        float dfx = x0;
-        float ddfx = x1 - 2.0f * x0;
-        float dddfx = x2 - 3.0f * x1 + 3.0f * x0;
-        float dfy = y0;
-        float ddfy = y1 - 2.0f * y0;
-        float dddfy = y2 - 3.0f * y1 + 3.0f * y0;
-
-        float h = 1.0f / 10.0f;
-        float A = 3.0f * h * h;
-        float B = 6.0f * h * h * h;
-
-        float Ux = (dddfx / B - 1.0f) / 3.0f;
-        float Vx = (ddfx - dddfx) / (2.0f * A);
-        cx1 = -Vx - Ux;
-        cx2 = -Vx - 2.0f * Ux;
-
-        float Uy = (dddfy / B - 1.0f) / 3.0f;
-        float Vy = (ddfy - dddfy) / (2.0f * A);
-        cy1 = -Vy - Uy;
-        cy2 = -Vy - 2.0f * Uy;
-
-        auto clamp = [](float v)
-        { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
-        cx1 = clamp(cx1);
-        cy1 = clamp(cy1);
-        cx2 = clamp(cx2);
-        cy2 = clamp(cy2);
-
-        return true;
-    }
-
-    double round_float(double value, int decimals = 6)
-    {
-        double rounded = std::round(value);
-        if (std::abs(value - rounded) < 1e-5)
-        {
-            return rounded;
-        }
-        double multiplier = std::pow(10.0, decimals);
-        return std::round(value * multiplier) / multiplier;
-    }
-
-    void maybe_add_curve(int i, const std::vector<float> &curves, json &frame)
-    {
-        size_t start = i * 19;
-        size_t end = start + 19;
-        if (end <= curves.size())
-        {
-            std::vector<float> b(curves.begin() + start, curves.begin() + end);
-            if (b[0] == 1.0f)
-            {
-                frame["curve"] = "stepped";
-            }
-            else if (b[0] == 2.0f)
-            {
-                float cx1, cy1, cx2, cy2;
-                if (bezier_from_spine_block(b, cx1, cy1, cx2, cy2))
-                {
-                    frame["curve"] = round_float(cx1);
-                    frame["c2"] = round_float(cy1);
-                    frame["c3"] = round_float(cx2);
-                    frame["c4"] = round_float(cy2);
-                }
-            }
-        }
-    }
-}
-
-namespace SCSPParser
-{
-
-    // LZ4 Decompression (block format)
-    std::vector<uint8_t> LZ4DecompressBlock(const uint8_t *src, size_t src_size, size_t uncompressed_size)
+    std::vector<uint8_t> DecompressBlock(const uint8_t *src, const size_t src_size, const size_t uncompressed_size)
     {
         std::vector<uint8_t> out;
         out.reserve(uncompressed_size);
@@ -232,7 +224,7 @@ namespace SCSPParser
         size_t i = 0;
         while (i < src_size)
         {
-            uint8_t token = src[i++];
+            const uint8_t token = src[i++];
 
             size_t lit_len = token >> 4;
             if (lit_len == 15)
@@ -257,7 +249,7 @@ namespace SCSPParser
 
             if (i + 2 > src_size)
                 break;
-            uint16_t offset = src[i] | (src[i + 1] << 8);
+            const uint16_t offset = src[i] | (src[i + 1] << 8);
             i += 2;
             if (offset == 0)
                 break;
@@ -273,7 +265,7 @@ namespace SCSPParser
                 }
             }
 
-            size_t start = out.size() - offset;
+            const size_t start = out.size() - offset;
             for (size_t j = 0; j < match_len; j++)
             {
                 out.push_back(out[start + j]);
@@ -295,8 +287,8 @@ namespace SCSPParser
             throw std::runtime_error("SCSP file too small");
         }
 
-        int32_t dec_len = read_le<int32_t>(data.data(), 0);
-        int32_t comp_len = read_le<int32_t>(data.data(), 4);
+        const auto dec_len = read_le<int32_t>(data.data(), 0);
+        const auto comp_len = read_le<int32_t>(data.data(), 4);
 
         if (comp_len < 0 || dec_len <= 0)
         {
@@ -308,11 +300,10 @@ namespace SCSPParser
             throw std::runtime_error("Compressed block exceeds file size");
         }
 
-        return LZ4DecompressBlock(data.data() + 8, comp_len, dec_len);
+        return DecompressBlock(data.data() + 8, comp_len, dec_len);
     }
 
-
-    Header ParseHeader(const uint8_t *buf, size_t buf_size)
+    Header ParseHeader(const uint8_t *buf, const size_t buf_size)
     {
         if (buf_size < 0x62)
         {
@@ -345,7 +336,7 @@ namespace SCSPParser
         {
             if (rel == 0xFFFFFFFF)
                 return "";
-            size_t off = strings_base + rel;
+            const size_t off = strings_base + rel;
             if (off >= strings_end)
                 return "";
             return read_cstr(buf, off, strings_end);
@@ -365,53 +356,52 @@ namespace SCSPParser
         return hdr;
     }
 
-    json ParseBones(const uint8_t *buf, size_t buf_size, size_t &pos,
-                    size_t strings_base, size_t strings_end,
-                    std::map<int16_t, std::string> &bone_names)
+    json ParseBones(const uint8_t *buf, const size_t buf_size, size_t &pos,
+                const size_t strings_base, const size_t strings_end,
+                std::map<int16_t, std::string> &bone_names)
     {
 
         if (pos + 2 > buf_size)
             return json::array();
 
-        uint16_t count = read_le<uint16_t>(buf, pos);
+        const auto count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         json bones = json::array();
-        std::map<int16_t, std::string> transform_modes = {
-            {0, "normal"}, {1, "onlyTranslation"}, {2, "noRotationOrReflection"}, {3, "noScale"}, {4, "noScaleOrReflection"}};
+        std::map<int16_t, std::string> transform_modes = {{0, "normal"}, {1, "onlyTranslation"}, {2, "noRotationOrReflection"}, {3, "noScale"}, {4, "noScaleOrReflection"}};
 
         for (uint16_t i = 0; i < count; i++)
         {
             if (pos + 6 > buf_size)
                 break;
 
-            int16_t index = read_le<int16_t>(buf, pos);
+            auto index = read_le<int16_t>(buf, pos);
             pos += 2;
-            uint32_t name_rel = read_le<uint32_t>(buf, pos);
+            const auto name_rel = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             if (pos + 2 > buf_size)
                 break;
-            int16_t parent = read_le<int16_t>(buf, pos);
+            auto parent = read_le<int16_t>(buf, pos);
             pos += 2;
 
             if (pos + 32 > buf_size)
                 break;
-            float length = read_le<float>(buf, pos);
-            float x = read_le<float>(buf, pos + 4);
-            float y = read_le<float>(buf, pos + 8);
-            float rot = read_le<float>(buf, pos + 12);
-            float sx = read_le<float>(buf, pos + 16);
-            float sy = read_le<float>(buf, pos + 20);
-            float shx = read_le<float>(buf, pos + 24);
-            float shy = read_le<float>(buf, pos + 28);
+            auto length = read_le<float>(buf, pos);
+            auto x = read_le<float>(buf, pos + 4);
+            auto y = read_le<float>(buf, pos + 8);
+            auto rot = read_le<float>(buf, pos + 12);
+            auto sx = read_le<float>(buf, pos + 16);
+            auto sy = read_le<float>(buf, pos + 20);
+            auto shx = read_le<float>(buf, pos + 24);
+            auto shy = read_le<float>(buf, pos + 28);
             pos += 32;
 
             if (pos + 3 > buf_size)
                 break;
-            uint16_t tmode = read_le<uint16_t>(buf, pos);
+            auto const tmode = read_le<uint16_t>(buf, pos);
             pos += 2;
-            bool skin = buf[pos] != 0;
+            const bool skin = buf[pos] != 0;
             pos += 1;
 
             std::string name;
@@ -464,32 +454,31 @@ namespace SCSPParser
     }
 
     json ParseSlots(const uint8_t *buf, size_t buf_size, size_t &pos,
-                    size_t strings_base, size_t strings_end,
-                    const std::map<int16_t, std::string> &bone_names,
-                    std::map<int16_t, std::string> &slot_names)
+                size_t strings_base, size_t strings_end,
+                const std::map<int16_t, std::string> &bone_names,
+                std::map<int16_t, std::string> &slot_names)
     {
 
         if (pos + 2 > buf_size)
             return json::array();
 
-        uint16_t count = read_le<uint16_t>(buf, pos);
+        auto count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         json slots = json::array();
-        std::map<uint16_t, std::string> blend_modes = {
-            {0, "normal"}, {1, "additive"}, {2, "multiply"}, {3, "screen"}};
+        std::map<uint16_t, std::string> blend_modes = {{0, "normal"}, {1, "additive"}, {2, "multiply"}, {3, "screen"}};
 
         for (uint16_t i = 0; i < count; i++)
         {
             if (pos + 2 > buf_size)
                 break;
 
-            int16_t slot_index = read_le<int16_t>(buf, pos);
+            auto slot_index = read_le<int16_t>(buf, pos);
             pos += 2;
 
             if (pos + 4 > buf_size)
                 break;
-            uint32_t name_rel = read_le<uint32_t>(buf, pos);
+            auto name_rel = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             std::string name;
@@ -500,7 +489,7 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            int16_t bone_idx = read_le<int16_t>(buf, pos);
+            auto bone_idx = read_le<int16_t>(buf, pos);
             pos += 2;
 
             std::string bone_name;
@@ -511,16 +500,16 @@ namespace SCSPParser
 
             if (pos + 32 > buf_size)
                 break;
-            float cr = read_le<float>(buf, pos + 0);
-            float cg = read_le<float>(buf, pos + 4);
-            float cb = read_le<float>(buf, pos + 8);
-            float ca = read_le<float>(buf, pos + 12);
+            auto cr = read_le<float>(buf, pos + 0);
+            auto cg = read_le<float>(buf, pos + 4);
+            auto cb = read_le<float>(buf, pos + 8);
+            auto ca = read_le<float>(buf, pos + 12);
             pos += 16;
 
-            float dr = read_le<float>(buf, pos + 0);
-            float dg = read_le<float>(buf, pos + 4);
-            float db = read_le<float>(buf, pos + 8);
-            float da = read_le<float>(buf, pos + 12);
+            auto dr = read_le<float>(buf, pos + 0);
+            auto dg = read_le<float>(buf, pos + 4);
+            auto db = read_le<float>(buf, pos + 8);
+            auto da = read_le<float>(buf, pos + 12);
             pos += 16;
 
             if (pos + 1 > buf_size)
@@ -530,12 +519,12 @@ namespace SCSPParser
 
             if (pos + 4 > buf_size)
                 break;
-            uint32_t attach_rel = read_le<uint32_t>(buf, pos);
+            auto attach_rel = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t blend_raw = read_le<uint16_t>(buf, pos);
+            auto blend_raw = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             std::string attachment;
@@ -587,16 +576,16 @@ namespace SCSPParser
         return slots;
     }
 
-    json ParseIKConstraints(const uint8_t *buf, size_t buf_size, size_t &pos,
-                            size_t strings_base, size_t strings_end,
-                            const std::map<int16_t, std::string> &bone_names,
-                            std::map<int, std::string> &ik_names)
+    json ParseIKConstraints(const uint8_t *buf, const size_t buf_size, size_t &pos,
+                        const size_t strings_base, const size_t strings_end,
+                        const std::map<int16_t, std::string> &bone_names,
+                        std::map<int, std::string> &ik_names)
     {
 
         if (pos + 2 > buf_size)
             return json::array();
 
-        uint16_t count = read_le<uint16_t>(buf, pos);
+        const auto count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         json iks = json::array();
@@ -606,7 +595,7 @@ namespace SCSPParser
             if (pos + 4 > buf_size)
                 break;
 
-            uint32_t name_rel = read_le<uint32_t>(buf, pos);
+            const auto name_rel = read_le<uint32_t>(buf, pos);
             pos += 4;
             std::string name;
             if (name_rel != 0xFFFFFFFF && strings_base + name_rel < strings_end)
@@ -618,7 +607,7 @@ namespace SCSPParser
 
             if (pos + 4 > buf_size)
                 break;
-            uint32_t order = read_le<uint32_t>(buf, pos);
+            const auto order = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             if (pos + 1 > buf_size)
@@ -628,24 +617,24 @@ namespace SCSPParser
 
             if (pos + 4 > buf_size)
                 break;
-            int32_t bendDirection = read_le<int32_t>(buf, pos);
+            const auto bendDirection = read_le<int32_t>(buf, pos);
             pos += 4;
 
             if (pos + 1 > buf_size)
                 break;
-            bool compress = buf[pos] != 0;
+            const bool compress = buf[pos] != 0;
             pos += 1;
 
             if (pos + 8 > buf_size)
                 break;
-            float mix = read_le<float>(buf, pos);
+            auto mix = read_le<float>(buf, pos);
             pos += 4;
-            float softness = read_le<float>(buf, pos);
+            auto softness = read_le<float>(buf, pos);
             pos += 4;
 
             if (pos + 1 > buf_size)
                 break;
-            bool stretch = buf[pos] != 0;
+            const bool stretch = buf[pos] != 0;
             pos += 1;
 
             if (pos + 1 > buf_size)
@@ -655,7 +644,7 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            int16_t t_idx = read_le<int16_t>(buf, pos);
+            auto t_idx = read_le<int16_t>(buf, pos);
             pos += 2;
             std::string target_name;
             if (t_idx >= 0 && bone_names.count(t_idx))
@@ -665,7 +654,7 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t nb = read_le<uint16_t>(buf, pos);
+            const auto nb = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             json bnames = json::array();
@@ -673,7 +662,7 @@ namespace SCSPParser
             {
                 if (pos + 2 > buf_size)
                     break;
-                int16_t bidx = read_le<int16_t>(buf, pos);
+                auto bidx = read_le<int16_t>(buf, pos);
                 pos += 2;
                 if (bidx >= 0 && bone_names.count(bidx))
                 {
@@ -683,7 +672,7 @@ namespace SCSPParser
 
             json ik;
             ik["name"] = name;
-            ik["order"] = (int)order;
+            ik["order"] = static_cast<int>(order);
             ik["skin"] = skinRequired;
             ik["bones"] = bnames;
             ik["target"] = target_name;
@@ -705,15 +694,15 @@ namespace SCSPParser
     }
 
     json ParseTransformConstraints(const uint8_t *buf, size_t buf_size, size_t &pos,
-                                   size_t strings_base, size_t strings_end,
-                                   const std::map<int16_t, std::string> &bone_names,
-                                   std::map<int, std::string> &transform_names)
+                               size_t strings_base, size_t strings_end,
+                               const std::map<int16_t, std::string> &bone_names,
+                               std::map<int, std::string> &transform_names)
     {
 
         if (pos + 2 > buf_size)
             return json::array();
 
-        uint16_t count = read_le<uint16_t>(buf, pos);
+        auto count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         json transforms = json::array();
@@ -723,7 +712,7 @@ namespace SCSPParser
             if (pos + 4 > buf_size)
                 break;
 
-            uint32_t name_off = read_le<uint32_t>(buf, pos);
+            auto name_off = read_le<uint32_t>(buf, pos);
             pos += 4;
             std::string name;
             if (name_off != 0xFFFFFFFF && strings_base + name_off < strings_end)
@@ -735,7 +724,7 @@ namespace SCSPParser
 
             if (pos + 4 > buf_size)
                 break;
-            uint32_t order = read_le<uint32_t>(buf, pos);
+            auto order = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             if (pos + 1 > buf_size)
@@ -745,25 +734,25 @@ namespace SCSPParser
 
             if (pos + 44 > buf_size)
                 break;
-            float rotateMix = read_le<float>(buf, pos);
+            auto rotateMix = read_le<float>(buf, pos);
             pos += 4;
-            float translateMix = read_le<float>(buf, pos);
+            auto translateMix = read_le<float>(buf, pos);
             pos += 4;
-            float scaleMix = read_le<float>(buf, pos);
+            auto scaleMix = read_le<float>(buf, pos);
             pos += 4;
-            float shearMix = read_le<float>(buf, pos);
+            auto shearMix = read_le<float>(buf, pos);
             pos += 4;
-            float offsetRotation = read_le<float>(buf, pos);
+            auto offsetRotation = read_le<float>(buf, pos);
             pos += 4;
-            float offsetX = read_le<float>(buf, pos);
+            auto offsetX = read_le<float>(buf, pos);
             pos += 4;
-            float offsetY = read_le<float>(buf, pos);
+            auto offsetY = read_le<float>(buf, pos);
             pos += 4;
-            float offsetScaleX = read_le<float>(buf, pos);
+            auto offsetScaleX = read_le<float>(buf, pos);
             pos += 4;
-            float offsetScaleY = read_le<float>(buf, pos);
+            auto offsetScaleY = read_le<float>(buf, pos);
             pos += 4;
-            float offsetShearY = read_le<float>(buf, pos);
+            auto offsetShearY = read_le<float>(buf, pos);
             pos += 4;
 
             if (pos + 1 > buf_size)
@@ -778,7 +767,7 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            int16_t tgt = read_le<int16_t>(buf, pos);
+            auto tgt = read_le<int16_t>(buf, pos);
             pos += 2;
             std::string tgt_name = "root";
             if (tgt >= 0 && bone_names.count(tgt))
@@ -788,7 +777,7 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t bc = read_le<uint16_t>(buf, pos);
+            auto bc = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             json blist = json::array();
@@ -796,7 +785,7 @@ namespace SCSPParser
             {
                 if (pos + 2 > buf_size)
                     break;
-                int16_t bi = read_le<int16_t>(buf, pos);
+                auto bi = read_le<int16_t>(buf, pos);
                 pos += 2;
                 if (bi >= 0 && bone_names.count(bi))
                 {
@@ -810,7 +799,7 @@ namespace SCSPParser
 
             json tr;
             tr["name"] = name;
-            tr["order"] = (int)order;
+            tr["order"] = static_cast<int>(order);
             tr["skin"] = skin_req;
             tr["target"] = tgt_name;
             tr["bones"] = blist;
@@ -835,16 +824,16 @@ namespace SCSPParser
     }
 
     json ParsePathConstraints(const uint8_t *buf, size_t buf_size, size_t &pos,
-                              size_t strings_base, size_t strings_end,
-                              const std::map<int16_t, std::string> &bone_names,
-                              const std::map<int16_t, std::string> &slot_names,
-                              std::map<int, std::string> &path_names)
+                          size_t strings_base, size_t strings_end,
+                          const std::map<int16_t, std::string> &bone_names,
+                          const std::map<int16_t, std::string> &slot_names,
+                          std::map<int, std::string> &path_names)
     {
 
         if (pos + 2 > buf_size)
             return json::array();
 
-        uint16_t count = read_le<uint16_t>(buf, pos);
+        auto count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         json paths = json::array();
@@ -857,7 +846,7 @@ namespace SCSPParser
             if (pos + 4 > buf_size)
                 break;
 
-            uint32_t name_off = read_le<uint32_t>(buf, pos);
+            auto name_off = read_le<uint32_t>(buf, pos);
             pos += 4;
             std::string name;
             if (name_off != 0xFFFFFFFF && strings_base + name_off < strings_end)
@@ -869,7 +858,7 @@ namespace SCSPParser
 
             if (pos + 4 > buf_size)
                 break;
-            uint32_t order = read_le<uint32_t>(buf, pos);
+            auto order = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             if (pos + 1 > buf_size)
@@ -879,29 +868,29 @@ namespace SCSPParser
 
             if (pos + 6 > buf_size)
                 break;
-            uint16_t positionMode = read_le<uint16_t>(buf, pos);
+            auto positionMode = read_le<uint16_t>(buf, pos);
             pos += 2;
-            uint16_t spacingMode = read_le<uint16_t>(buf, pos);
+            auto spacingMode = read_le<uint16_t>(buf, pos);
             pos += 2;
-            uint16_t rotateMode = read_le<uint16_t>(buf, pos);
+            auto rotateMode = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             if (pos + 20 > buf_size)
                 break;
-            float offsetRotation = read_le<float>(buf, pos);
+            auto offsetRotation = read_le<float>(buf, pos);
             pos += 4;
-            float position = read_le<float>(buf, pos);
+            auto position = read_le<float>(buf, pos);
             pos += 4;
-            float spacing = read_le<float>(buf, pos);
+            auto spacing = read_le<float>(buf, pos);
             pos += 4;
-            float rotateMix = read_le<float>(buf, pos);
+            auto rotateMix = read_le<float>(buf, pos);
             pos += 4;
-            float translateMix = read_le<float>(buf, pos);
+            auto translateMix = read_le<float>(buf, pos);
             pos += 4;
 
             if (pos + 2 > buf_size)
                 break;
-            int16_t tgt = read_le<int16_t>(buf, pos);
+            auto tgt = read_le<int16_t>(buf, pos);
             pos += 2;
             std::string tgt_name = "slot0";
             if (tgt >= 0 && slot_names.count(tgt))
@@ -911,7 +900,7 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t bc = read_le<uint16_t>(buf, pos);
+            auto bc = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             json blist = json::array();
@@ -919,7 +908,7 @@ namespace SCSPParser
             {
                 if (pos + 2 > buf_size)
                     break;
-                int16_t bi = read_le<int16_t>(buf, pos);
+                auto bi = read_le<int16_t>(buf, pos);
                 pos += 2;
                 if (bi >= 0 && bone_names.count(bi))
                 {
@@ -933,7 +922,7 @@ namespace SCSPParser
 
             json pc;
             pc["name"] = name;
-            pc["order"] = (int)order;
+            pc["order"] = static_cast<int>(order);
             pc["skin"] = skin_req;
             pc["positionMode"] = pos_modes.count(positionMode) ? pos_modes[positionMode] : "percent";
             pc["spacingMode"] = spacing_modes.count(spacingMode) ? spacing_modes[spacingMode] : "length";
@@ -954,18 +943,18 @@ namespace SCSPParser
     }
 
     json ParseSkins(const uint8_t *buf, size_t buf_size, size_t &pos,
-                    size_t strings_base, size_t strings_end,
-                    const std::map<int16_t, std::string> &slot_names,
-                    AttachmentMetaMap &attachment_meta,
-                    int hdr_version,
-                    std::map<int, std::string> &skin_names)
+                size_t strings_base, size_t strings_end,
+                const std::map<int16_t, std::string> &slot_names,
+                AttachmentMetaMap &attachment_meta,
+                int hdr_version,
+                std::map<int, std::string> &skin_names)
     {
 
         json skins = json::array();
 
         if (pos + 2 > buf_size)
             return skins;
-        uint16_t skin_count = read_le<uint16_t>(buf, pos);
+        auto skin_count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         for (int sidx = 0; sidx < skin_count; sidx++)
@@ -973,7 +962,7 @@ namespace SCSPParser
             std::string name = "default";
             if (pos + 4 > buf_size)
                 break;
-            uint32_t off = read_le<uint32_t>(buf, pos);
+            auto off = read_le<uint32_t>(buf, pos);
             pos += 4;
             if (off != 0xFFFFFFFF && strings_base + off < strings_end)
             {
@@ -985,13 +974,13 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t bc = read_le<uint16_t>(buf, pos);
+            auto bc = read_le<uint16_t>(buf, pos);
             pos += 2;
             pos += 2 * bc;
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t cc = read_le<uint16_t>(buf, pos);
+            auto cc = read_le<uint16_t>(buf, pos);
             pos += 2;
             for (int k = 0; k < cc; k++)
             {
@@ -1004,14 +993,14 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t ac = read_le<uint16_t>(buf, pos);
+            auto ac = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             for (int a = 0; a < ac; a++)
             {
                 if (pos + 2 > buf_size)
                     break;
-                uint16_t slot_idx = read_le<uint16_t>(buf, pos);
+                auto slot_idx = read_le<uint16_t>(buf, pos);
                 pos += 2;
                 std::string slot_name = "slot" + std::to_string(slot_idx);
                 if (slot_names.count(slot_idx))
@@ -1019,7 +1008,7 @@ namespace SCSPParser
 
                 if (pos + 4 > buf_size)
                     break;
-                uint32_t name_off = read_le<uint32_t>(buf, pos);
+                auto name_off = read_le<uint32_t>(buf, pos);
                 pos += 4;
                 std::string att_name = "att" + std::to_string(a);
                 if (name_off != 0xFFFFFFFF && strings_base + name_off < strings_end)
@@ -1031,7 +1020,7 @@ namespace SCSPParser
 
                 if (pos + 2 > buf_size)
                     break;
-                int16_t atype = read_le<int16_t>(buf, pos);
+                auto atype = read_le<int16_t>(buf, pos);
                 pos += 2;
 
                 if (pos + 4 > buf_size)
@@ -1046,19 +1035,19 @@ namespace SCSPParser
                     // Region
                     if (pos + 24 > buf_size)
                         break;
-                    float x = read_le<float>(buf, pos);
+                    auto x = read_le<float>(buf, pos);
                     pos += 4;
-                    float y = read_le<float>(buf, pos);
+                    auto y = read_le<float>(buf, pos);
                     pos += 4;
-                    float rot = read_le<float>(buf, pos);
+                    auto rot = read_le<float>(buf, pos);
                     pos += 4;
-                    float sx = read_le<float>(buf, pos);
+                    auto sx = read_le<float>(buf, pos);
                     pos += 4;
-                    float sy = read_le<float>(buf, pos);
+                    auto sy = read_le<float>(buf, pos);
                     pos += 4;
-                    float w = read_le<float>(buf, pos);
+                    auto w = read_le<float>(buf, pos);
                     pos += 4;
-                    float h = read_le<float>(buf, pos);
+                    auto h = read_le<float>(buf, pos);
                     pos += 4;
 
                     // Skip 6 floats (24 bytes) before vc/uc
@@ -1067,19 +1056,19 @@ namespace SCSPParser
                     // vc, uc
                     if (pos + 2 > buf_size)
                         break;
-                    uint16_t vc = read_le<uint16_t>(buf, pos);
+                    auto vc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     pos += 4 * vc;
                     if (pos + 2 > buf_size)
                         break;
-                    uint16_t uc = read_le<uint16_t>(buf, pos);
+                    auto uc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     pos += 4 * uc;
 
                     // path
                     if (pos + 4 > buf_size)
                         break;
-                    uint32_t poff = read_le<uint32_t>(buf, pos);
+                    auto poff = read_le<uint32_t>(buf, pos);
                     pos += 4;
                     std::string path;
                     if (poff != 0xFFFFFFFF && strings_base + poff < strings_end)
@@ -1090,13 +1079,13 @@ namespace SCSPParser
                     // color
                     if (pos + 16 > buf_size)
                         break;
-                    float cr = read_le<float>(buf, pos);
+                    auto cr = read_le<float>(buf, pos);
                     pos += 4;
-                    float cg = read_le<float>(buf, pos);
+                    auto cg = read_le<float>(buf, pos);
                     pos += 4;
-                    float cb = read_le<float>(buf, pos);
+                    auto cb = read_le<float>(buf, pos);
                     pos += 4;
-                    float ca = read_le<float>(buf, pos);
+                    auto ca = read_le<float>(buf, pos);
                     pos += 4;
 
                     att["type"] = "region";
@@ -1127,13 +1116,13 @@ namespace SCSPParser
                     attachment_meta[{name, slot_idx, att_name}] = {is_weighted, is_weighted ? std::vector<float>() : verts};
 
                     att["type"] = "boundingbox";
-                    att["vertexCount"] = (int)world_vertices_len >> 1;
+                    att["vertexCount"] = static_cast<int>(world_vertices_len) >> 1;
 
                     if (!bones.empty())
                     {
                         json jv = json::array();
                         int i = 0, vf = 0;
-                        while (i < (int)bones.size())
+                        while (i < static_cast<int>(bones.size()))
                         {
                             int c = bones[i++];
                             jv.push_back(c);
@@ -1170,15 +1159,15 @@ namespace SCSPParser
 
                     pos += 4 * 6; // Skip 24 bytes
 
-                    uint16_t uvc = read_le<uint16_t>(buf, pos);
+                    auto uvc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> uvs = read_f32_array(buf, buf_size, pos, uvc);
 
-                    uint16_t ruvc = read_le<uint16_t>(buf, pos);
+                    auto ruvc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> regionUVs = read_f32_array(buf, buf_size, pos, ruvc);
 
-                    uint16_t tc = read_le<uint16_t>(buf, pos);
+                    auto tc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<uint16_t> triangles;
                     for (int i = 0; i < tc; i++)
@@ -1187,7 +1176,7 @@ namespace SCSPParser
                         pos += 2;
                     }
 
-                    uint16_t ec = read_le<uint16_t>(buf, pos);
+                    auto ec = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<uint16_t> edges;
                     for (int i = 0; i < ec; i++)
@@ -1197,7 +1186,7 @@ namespace SCSPParser
                     }
 
                     std::string mpath = vpath;
-                    uint32_t moff = read_le<uint32_t>(buf, pos);
+                    auto moff = read_le<uint32_t>(buf, pos);
                     pos += 4;
                     if (moff != 0xFFFFFFFF && strings_base + moff < strings_end)
                     {
@@ -1206,35 +1195,35 @@ namespace SCSPParser
                             mpath = s;
                     }
 
-                    float regionU = read_le<float>(buf, pos);
+                    auto regionU = read_le<float>(buf, pos);
                     pos += 4;
-                    float regionV = read_le<float>(buf, pos);
+                    auto regionV = read_le<float>(buf, pos);
                     pos += 4;
-                    float regionU2 = read_le<float>(buf, pos);
+                    auto regionU2 = read_le<float>(buf, pos);
                     pos += 4;
-                    float regionV2 = read_le<float>(buf, pos);
+                    auto regionV2 = read_le<float>(buf, pos);
                     pos += 4;
-                    float width = read_le<float>(buf, pos);
+                    auto width = read_le<float>(buf, pos);
                     pos += 4;
-                    float height = read_le<float>(buf, pos);
-                    pos += 4;
-
-                    float cr = read_le<float>(buf, pos);
-                    pos += 4;
-                    float cg = read_le<float>(buf, pos);
-                    pos += 4;
-                    float cb = read_le<float>(buf, pos);
-                    pos += 4;
-                    float ca = read_le<float>(buf, pos);
+                    auto height = read_le<float>(buf, pos);
                     pos += 4;
 
-                    uint32_t hull = read_le<uint32_t>(buf, pos);
+                    auto cr = read_le<float>(buf, pos);
+                    pos += 4;
+                    auto cg = read_le<float>(buf, pos);
+                    pos += 4;
+                    auto cb = read_le<float>(buf, pos);
+                    pos += 4;
+                    auto ca = read_le<float>(buf, pos);
+                    pos += 4;
+
+                    auto hull = read_le<uint32_t>(buf, pos);
                     pos += 4;
                     bool regionRotate = buf[pos] != 0;
                     pos += 1;
                     pos += 4; // _deg
 
-                    uint32_t parent_off = read_le<uint32_t>(buf, pos);
+                    auto parent_off = read_le<uint32_t>(buf, pos);
                     pos += 4;
                     std::string parent_name;
                     if (parent_off != 0xFFFFFFFF && strings_base + parent_off < strings_end)
@@ -1247,7 +1236,7 @@ namespace SCSPParser
                     {
                         json jv = json::array();
                         int i = 0, vf = 0;
-                        while (i < (int)bones.size())
+                        while (i < static_cast<int>(bones.size()))
                         {
                             int c = bones[i++];
                             jv.push_back(c);
@@ -1270,7 +1259,7 @@ namespace SCSPParser
                     {
                         // Linked Mesh
                         int16_t temp_skin_idx = 0;
-                        std::string temp_skin_name = "";
+                        std::string temp_skin_name;
                         if (hdr_version > 0x7530)
                         {
                             pos += 2;
@@ -1279,7 +1268,7 @@ namespace SCSPParser
                         {
                             temp_skin_idx = read_le<int16_t>(buf, pos);
                             pos += 2;
-                            uint32_t soff = read_le<uint32_t>(buf, pos);
+                            auto soff = read_le<uint32_t>(buf, pos);
                             pos += 4;
                             if (soff != 0xFFFFFFFF && strings_base + soff < strings_end)
                             {
@@ -1287,7 +1276,7 @@ namespace SCSPParser
                             }
                         }
 
-                        int16_t skin_idx = read_le<int16_t>(buf, pos);
+                        auto skin_idx = read_le<int16_t>(buf, pos);
                         pos += 2;
                         bool deform_flag = buf[pos] != 0;
                         pos += 1;
@@ -1345,7 +1334,7 @@ namespace SCSPParser
                     bool is_weighted = !bones.empty();
                     attachment_meta[{name, slot_idx, att_name}] = {is_weighted, is_weighted ? std::vector<float>() : verts};
 
-                    uint16_t cnt = read_le<uint16_t>(buf, pos);
+                    auto cnt = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> lengths = read_f32_array(buf, buf_size, pos, cnt);
                     bool closed = buf[pos] != 0;
@@ -1357,13 +1346,13 @@ namespace SCSPParser
                     att["closed"] = closed;
                     att["constantSpeed"] = constantSpeed;
                     att["lengths"] = lengths;
-                    att["vertexCount"] = (int)world_vertices_len >> 1;
+                    att["vertexCount"] = static_cast<int>(world_vertices_len) >> 1;
 
                     if (!bones.empty())
                     {
                         json jv = json::array();
                         int i = 0, vf = 0;
-                        while (i < (int)bones.size())
+                        while (i < static_cast<int>(bones.size()))
                         {
                             int c = bones[i++];
                             jv.push_back(c);
@@ -1387,11 +1376,11 @@ namespace SCSPParser
                 else if (atype == 5)
                 {
                     // Point
-                    float x = read_le<float>(buf, pos);
+                    auto x = read_le<float>(buf, pos);
                     pos += 4;
-                    float y = read_le<float>(buf, pos);
+                    auto y = read_le<float>(buf, pos);
                     pos += 4;
-                    float rotation = read_le<float>(buf, pos);
+                    auto rotation = read_le<float>(buf, pos);
                     pos += 4;
                     pos += 4;
 
@@ -1413,7 +1402,7 @@ namespace SCSPParser
                     bool is_weighted = !bones.empty();
                     attachment_meta[{name, slot_idx, att_name}] = {is_weighted, is_weighted ? std::vector<float>() : verts};
 
-                    int16_t end_slot_idx = read_le<int16_t>(buf, pos);
+                    auto end_slot_idx = read_le<int16_t>(buf, pos);
                     pos += 2;
                     std::string end_slot_name = "slot" + std::to_string(end_slot_idx);
                     if (slot_names.count(end_slot_idx))
@@ -1421,13 +1410,13 @@ namespace SCSPParser
 
                     att["type"] = "clipping";
                     att["end"] = end_slot_name;
-                    att["vertexCount"] = (int)world_vertices_len >> 1;
+                    att["vertexCount"] = static_cast<int>(world_vertices_len) >> 1;
 
                     if (!bones.empty())
                     {
                         json jv = json::array();
                         int i = 0, vf = 0;
-                        while (i < (int)bones.size())
+                        while (i < static_cast<int>(bones.size()))
                         {
                             int c = bones[i++];
                             jv.push_back(c);
@@ -1494,14 +1483,14 @@ namespace SCSPParser
     }
 
     json ParseEvents(const uint8_t *buf, size_t buf_size, size_t &pos,
-                     size_t strings_base, size_t strings_end,
-                     std::map<int, std::string> &event_names)
+                 const size_t strings_base, size_t strings_end,
+                 std::map<int, std::string> &event_names)
     {
 
         if (pos + 2 > buf_size)
             return json::object();
 
-        uint16_t event_count = read_le<uint16_t>(buf, pos);
+        const auto event_count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         json events = json::object();
@@ -1511,7 +1500,7 @@ namespace SCSPParser
             if (pos + 4 > buf_size)
                 break;
 
-            uint32_t name_off = read_le<uint32_t>(buf, pos);
+            const auto name_off = read_le<uint32_t>(buf, pos);
             pos += 4;
             std::string name;
             if (name_off != 0xFFFFFFFF && strings_base + name_off < strings_end)
@@ -1521,11 +1510,11 @@ namespace SCSPParser
 
             if (pos + 12 > buf_size)
                 break;
-            uint32_t intData = read_le<uint32_t>(buf, pos);
+            auto intData = read_le<uint32_t>(buf, pos);
             pos += 4;
-            float floatData = read_le<float>(buf, pos);
+            auto floatData = read_le<float>(buf, pos);
             pos += 4;
-            uint32_t stringOff = read_le<uint32_t>(buf, pos);
+            const auto stringOff = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             std::string stringData;
@@ -1536,7 +1525,7 @@ namespace SCSPParser
 
             if (pos + 12 > buf_size)
                 break;
-            uint32_t audioOff = read_le<uint32_t>(buf, pos);
+            const auto audioOff = read_le<uint32_t>(buf, pos);
             pos += 4;
 
             std::string audioData;
@@ -1545,9 +1534,9 @@ namespace SCSPParser
                 audioData = read_cstr(buf, strings_base + audioOff, strings_end);
             }
 
-            float volume = read_le<float>(buf, pos);
+            auto volume = read_le<float>(buf, pos);
             pos += 4;
-            float balance = read_le<float>(buf, pos);
+            auto balance = read_le<float>(buf, pos);
             pos += 4;
 
             json evt;
@@ -1569,32 +1558,32 @@ namespace SCSPParser
     }
 
     json ParseAnimations(const uint8_t *buf, size_t buf_size, size_t &pos,
-                         size_t strings_base, size_t strings_end,
-                         const std::map<int16_t, std::string> &bone_names,
-                         const std::map<int16_t, std::string> &slot_names,
-                         const std::map<int, std::string> &skin_names,
-                         const std::map<int, std::string> &ik_names,
-                         const std::map<int, std::string> &transform_names,
-                         const std::map<int, std::string> &path_names,
-                         const std::map<int, std::string> &event_names,
-                         const AttachmentMetaMap &attachment_meta,
-                         int hdr_version)
+                     size_t strings_base, size_t strings_end,
+                     const std::map<int16_t, std::string> &bone_names,
+                     const std::map<int16_t, std::string> &slot_names,
+                     const std::map<int, std::string> &skin_names,
+                     const std::map<int, std::string> &ik_names,
+                     const std::map<int, std::string> &transform_names,
+                     const std::map<int, std::string> &path_names,
+                     const std::map<int, std::string> &event_names,
+                     const AttachmentMetaMap &attachment_meta,
+                     int hdr_version)
     {
 
         json animations = json::object();
         if (pos + 2 > buf_size)
             return animations;
 
-        uint16_t anim_count = read_le<uint16_t>(buf, pos);
+        auto anim_count = read_le<uint16_t>(buf, pos);
         pos += 2;
 
         for (uint16_t ai = 0; ai < anim_count; ai++)
         {
             if (pos + 8 > buf_size)
                 break;
-            uint32_t name_off = read_le<uint32_t>(buf, pos);
+            auto name_off = read_le<uint32_t>(buf, pos);
             pos += 4;
-            float duration = read_le<float>(buf, pos);
+            auto duration = read_le<float>(buf, pos);
             pos += 4;
 
             std::string name = "anim" + std::to_string(ai);
@@ -1614,27 +1603,27 @@ namespace SCSPParser
 
             if (pos + 2 > buf_size)
                 break;
-            uint16_t timeline_count = read_le<uint16_t>(buf, pos);
+            auto timeline_count = read_le<uint16_t>(buf, pos);
             pos += 2;
 
             for (int k = 0; k < timeline_count; k++)
             {
                 if (pos + 2 > buf_size)
                     break;
-                uint16_t ttype = read_le<uint16_t>(buf, pos);
+                auto ttype = read_le<uint16_t>(buf, pos);
                 pos += 2;
 
                 if (ttype <= 3)
                 {
                     // Rotate, Translate, Scale, Shear
-                    uint16_t bone_idx = read_le<uint16_t>(buf, pos);
+                    auto bone_idx = read_le<uint16_t>(buf, pos);
                     pos += 2;
 
                     // Read frames
-                    uint16_t fc = read_le<uint16_t>(buf, pos);
+                    auto fc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> values = read_f32_array(buf, buf_size, pos, fc);
-                    uint16_t cc = read_le<uint16_t>(buf, pos);
+                    auto cc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> curves = read_f32_array(buf, buf_size, pos, cc);
 
@@ -1674,24 +1663,24 @@ namespace SCSPParser
                             fr["x"] = values[i * 3 + 1];
                             fr["y"] = values[i * 3 + 2];
                         }
-                        maybe_add_curve(i, curves, fr);
+                        add_curve(i, curves, fr);
                         anim["bones"][bkey][tname_str].push_back(fr);
                     }
                 }
                 else if (ttype == 4)
                 {
                     // Attachment
-                    uint16_t slot_idx = read_le<uint16_t>(buf, pos);
+                    auto slot_idx = read_le<uint16_t>(buf, pos);
                     pos += 2;
-                    uint16_t fc = read_le<uint16_t>(buf, pos);
+                    auto fc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> times = read_f32_array(buf, buf_size, pos, fc);
-                    uint16_t name_cnt = read_le<uint16_t>(buf, pos);
+                    auto name_cnt = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<std::string> names;
                     for (int i = 0; i < name_cnt; i++)
                     {
-                        uint32_t soff = read_le<uint32_t>(buf, pos);
+                        auto soff = read_le<uint32_t>(buf, pos);
                         pos += 4;
                         if (soff != 0xFFFFFFFF && strings_base + soff < strings_end)
                         {
@@ -1699,7 +1688,7 @@ namespace SCSPParser
                         }
                         else
                         {
-                            names.push_back("");
+                            names.emplace_back("");
                         }
                     }
 
@@ -1712,7 +1701,7 @@ namespace SCSPParser
                     if (!anim["slots"][sname].contains("attachment"))
                         anim["slots"][sname]["attachment"] = json::array();
 
-                    int count = std::min((int)fc, (int)names.size());
+                    int count = std::min(static_cast<int>(fc), static_cast<int>(names.size()));
                     for (int i = 0; i < count; i++)
                     {
                         json fr;
@@ -1727,36 +1716,36 @@ namespace SCSPParser
                 else if (ttype == 6)
                 {
                     // Deform
-                    uint16_t slot_idx = read_le<uint16_t>(buf, pos);
+                    auto slot_idx = read_le<uint16_t>(buf, pos);
                     pos += 2;
 
-                    uint16_t fc = read_le<uint16_t>(buf, pos);
+                    auto fc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> values = read_f32_array(buf, buf_size, pos, fc);
-                    uint16_t cc = read_le<uint16_t>(buf, pos);
+                    auto cc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> curves = read_f32_array(buf, buf_size, pos, cc);
 
-                    uint16_t fv_frames = read_le<uint16_t>(buf, pos);
+                    auto fv_frames = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<std::vector<float>> frame_vertices;
                     for (int i = 0; i < fv_frames; i++)
                     {
-                        uint16_t cnt = read_le<uint16_t>(buf, pos);
+                        auto cnt = read_le<uint16_t>(buf, pos);
                         pos += 2;
                         frame_vertices.push_back(read_f32_array(buf, buf_size, pos, cnt));
                     }
 
-                    uint32_t att_off = read_le<uint32_t>(buf, pos);
+                    auto att_off = read_le<uint32_t>(buf, pos);
                     pos += 4;
-                    std::string att_name = "";
+                    std::string att_name;
                     if (att_off != 0xFFFFFFFF && strings_base + att_off < strings_end)
                         att_name = read_cstr(buf, strings_base + att_off, strings_end);
 
                     std::string skinname = "default";
                     if (hdr_version > 0x7530 && pos + 2 <= buf_size)
                     {
-                        uint16_t sidx = read_le<uint16_t>(buf, pos);
+                        auto sidx = read_le<uint16_t>(buf, pos);
                         pos += 2;
                         if (skin_names.count(sidx))
                             skinname = skin_names.at(sidx);
@@ -1765,7 +1754,7 @@ namespace SCSPParser
                     // Process Deform
                     bool is_unweighted = true;
                     std::vector<float> setup;
-                    auto key = std::make_tuple(skinname, (int)slot_idx, att_name);
+                    auto key = std::make_tuple(skinname, static_cast<int>(slot_idx), att_name);
                     if (attachment_meta.count(key))
                     {
                         is_unweighted = !attachment_meta.at(key).weighted;
@@ -1783,13 +1772,12 @@ namespace SCSPParser
                     if (!anim["deform"][skinname][sname].contains(att_name))
                         anim["deform"][skinname][sname][att_name] = json::array();
 
-                    int n = std::min((int)fc, (int)fv_frames);
+                    int n = std::min(static_cast<int>(fc), static_cast<int>(fv_frames));
                     for (int i = 0; i < n; i++)
                     {
                         json fr;
                         fr["time"] = values[i];
-                        const auto &verts = frame_vertices[i];
-                        if (!verts.empty())
+                        if (const auto &verts = frame_vertices[i]; !verts.empty())
                         {
                             std::vector<float> diffs;
                             if (is_unweighted && setup.size() == verts.size())
@@ -1803,11 +1791,11 @@ namespace SCSPParser
                             }
 
                             int start = 0;
-                            while (start < (int)diffs.size() && std::abs(diffs[start]) < 1e-6)
+                            while (start < static_cast<int>(diffs.size()) && std::abs(diffs[start]) < 1e-6)
                                 start++;
-                            if (start < (int)diffs.size())
+                            if (start < static_cast<int>(diffs.size()))
                             {
-                                int end = (int)diffs.size() - 1;
+                                int end = static_cast<int>(diffs.size()) - 1;
                                 while (end >= 0 && std::abs(diffs[end]) < 1e-6)
                                     end--;
 
@@ -1819,17 +1807,17 @@ namespace SCSPParser
                                     fr["offset"] = start;
                             }
                         }
-                        maybe_add_curve(i, curves, fr);
+                        add_curve(i, curves, fr);
                         anim["deform"][skinname][sname][att_name].push_back(fr);
                     }
                 }
                 else if (ttype == 7)
                 {
                     // Events timeline (consume only)
-                    uint16_t fc = read_le<uint16_t>(buf, pos);
+                    auto fc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> times = read_f32_array(buf, buf_size, pos, fc);
-                    uint16_t evc = read_le<uint16_t>(buf, pos);
+                    auto evc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     for (int i = 0; i < evc; i++)
                     {
@@ -1840,21 +1828,21 @@ namespace SCSPParser
                 else if (ttype == 8)
                 {
                     // DrawOrder
-                    int slot_count = (int)slot_names.size();
+                    int slot_count = static_cast<int>(slot_names.size());
 
-                    uint16_t fc = read_le<uint16_t>(buf, pos);
+                    auto fc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> times = read_f32_array(buf, buf_size, pos, fc);
-                    uint16_t groups = read_le<uint16_t>(buf, pos);
+                    auto groups = read_le<uint16_t>(buf, pos);
                     pos += 2;
 
                     json drawOrder = json::array();
                     for (int i = 0; i < groups; i++)
                     {
-                        uint16_t c = read_le<uint16_t>(buf, pos);
+                        auto c = read_le<uint16_t>(buf, pos);
                         pos += 2;
                         json fr;
-                        fr["time"] = (i < (int)times.size()) ? times[i] : 0.0f;
+                        fr["time"] = (i < static_cast<int>(times.size())) ? times[i] : 0.0f;
 
                         json offsets = json::array();
                         if (c == slot_count)
@@ -1862,7 +1850,7 @@ namespace SCSPParser
                             std::vector<int> new_order;
                             for (int j = 0; j < c; j++)
                             {
-                                new_order.push_back((int)read_le<uint32_t>(buf, pos));
+                                new_order.push_back(static_cast<int>(read_le<uint32_t>(buf, pos)));
                                 pos += 4;
                             }
                             // Map new positions
@@ -1912,13 +1900,13 @@ namespace SCSPParser
                 }
                 else if (ttype == 5 || ttype == 9 || ttype == 10 || ttype >= 11)
                 {
-                    uint16_t idx = read_le<uint16_t>(buf, pos);
+                    auto idx = read_le<uint16_t>(buf, pos);
                     pos += 2;
 
-                    uint16_t fc = read_le<uint16_t>(buf, pos);
+                    auto fc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> values = read_f32_array(buf, buf_size, pos, fc);
-                    uint16_t cc = read_le<uint16_t>(buf, pos);
+                    auto cc = read_le<uint16_t>(buf, pos);
                     pos += 2;
                     std::vector<float> curves = read_f32_array(buf, buf_size, pos, cc);
 
@@ -1940,7 +1928,7 @@ namespace SCSPParser
                             json fr;
                             fr["time"] = values[b];
                             fr["color"] = rgba_to_hex(values[b + 1], values[b + 2], values[b + 3], values[b + 4]);
-                            maybe_add_curve(i, curves, fr);
+                            add_curve(i, curves, fr);
                             anim["slots"][sname]["color"].push_back(fr);
                         }
                     }
@@ -1966,7 +1954,7 @@ namespace SCSPParser
                                 fr["compress"] = true;
                             if (values[b + 5] != 0)
                                 fr["stretch"] = true;
-                            maybe_add_curve(i, curves, fr);
+                            add_curve(i, curves, fr);
                             anim["ik"][cname].push_back(fr);
                         }
                     }
@@ -1989,7 +1977,7 @@ namespace SCSPParser
                             fr["translateMix"] = values[b + 2];
                             fr["scaleMix"] = values[b + 3];
                             fr["shearMix"] = values[b + 4];
-                            maybe_add_curve(i, curves, fr);
+                            add_curve(i, curves, fr);
                             anim["transform"][cname].push_back(fr);
                         }
                     }
@@ -2014,7 +2002,7 @@ namespace SCSPParser
                                 fr["time"] = values[b];
                                 fr["rotateMix"] = values[b + 1];
                                 fr["translateMix"] = values[b + 2];
-                                maybe_add_curve(i, curves, fr);
+                                add_curve(i, curves, fr);
                                 anim["path"][cname]["mix"].push_back(fr);
                             }
                         }
@@ -2031,7 +2019,7 @@ namespace SCSPParser
                                 json fr;
                                 fr["time"] = values[b];
                                 fr[key] = values[b + 1];
-                                maybe_add_curve(i, curves, fr);
+                                add_curve(i, curves, fr);
                                 anim["path"][cname][key].push_back(fr);
                             }
                         }
@@ -2055,7 +2043,7 @@ namespace SCSPParser
                             fr["time"] = values[b];
                             fr["light"] = rgba_to_hex(values[b + 1], values[b + 2], values[b + 3], values[b + 4]);
                             fr["dark"] = rgb_to_hex(values[b + 5], values[b + 6], values[b + 7]);
-                            maybe_add_curve(i, curves, fr);
+                            add_curve(i, curves, fr);
                             anim["slots"][sname]["twoColor"].push_back(fr);
                         }
                     }
@@ -2157,29 +2145,28 @@ namespace SCSPParser
 
         return result.dump(4);
     }
+}
 
-    std::string ConvertToJson(const std::vector<uint8_t> &scsp_data)
-    {
-        auto decompressed = DecompressSCSP(scsp_data);
-        return ParseSCSPToJson(decompressed);
-    }
+std::string SCSPParser::ConvertToJson(const std::vector<uint8_t> &scsp_data)
+{
+    const auto decompressed = DecompressSCSP(scsp_data);
+    return ParseSCSPToJson(decompressed);
+}
 
-    HeaderInfo ExtractHeader(const std::vector<uint8_t> &scsp_data)
-    {
-        auto decompressed = DecompressSCSP(scsp_data);
-        if (decompressed.empty())
-            return {};
+SCSPParser::HeaderInfo SCSPParser::ExtractHeader(const std::vector<uint8_t> &scsp_data)
+{
+    const auto decompressed = DecompressSCSP(scsp_data);
+    if (decompressed.empty())
+        return {};
 
-        Header hdr = ParseHeader(decompressed.data(), decompressed.size());
+    const Header hdr = ParseHeader(decompressed.data(), decompressed.size());
 
-        HeaderInfo info;
-        info.width = hdr.width;
-        info.height = hdr.height;
-        info.version = hdr.version;
-        info.images_path = hdr.images_path;
-        info.audio_path = hdr.audio_path;
-        info.hash = hdr.hash;
-        return info;
-    }
-
+    HeaderInfo info;
+    info.width = hdr.width;
+    info.height = hdr.height;
+    info.version = hdr.version;
+    info.images_path = hdr.images_path;
+    info.audio_path = hdr.audio_path;
+    info.hash = hdr.hash;
+    return info;
 }

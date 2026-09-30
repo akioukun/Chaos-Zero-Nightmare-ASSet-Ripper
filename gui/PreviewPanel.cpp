@@ -17,6 +17,336 @@
 #include <sstream>
 #include <vector>
 
+namespace {
+    void load_json_preview(const Core::FileNode &node, const std::string &content = "")
+    {
+        try
+        {
+            g_state.preview.json_preview = "";
+            std::string json_content = content;
+
+            if (json_content.empty())
+            {
+                if (std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node); !file_data.empty())
+                {
+                    json_content = std::string(file_data.begin(), file_data.end());
+                }
+                else
+                {
+                    g_state.preview.error = "Failed to read JSON file";
+                    g_state.preview.mode = PreviewMode::None;
+                    return;
+                }
+            }
+
+            try
+            {
+                const nlohmann::json parsed = nlohmann::json::parse(json_content);
+                g_state.preview.json_preview = parsed.dump(2);
+            }
+            catch (...)
+            {
+                g_state.preview.json_preview = json_content;
+            }
+            g_state.preview.mode = PreviewMode::JSON;
+        }
+        catch (const std::exception &e)
+        {
+            g_state.preview.error = "Error loading JSON: " + std::string(e.what());
+            g_state.preview.mode = PreviewMode::None;
+        }
+    }
+
+    void load_db_preview(const Core::FileNode &node)
+    {
+        try
+        {
+            g_state.database.column_names.clear();
+            g_state.database.rows.clear();
+            g_state.database.json_data.clear();
+            g_state.preview.json_preview = "";
+            g_state.preview.mode = PreviewMode::None;
+
+            const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
+            if (file_data.empty())
+            {
+                g_state.preview.error = "Failed to read DB file";
+                return;
+            }
+
+            std::string json_str = DBParser::ConvertToJson(file_data);
+            if (json_str.empty() || json_str == "{}")
+            {
+                g_state.preview.json_preview = json_str;
+                g_state.preview.mode = PreviewMode::JSON;
+                return;
+            }
+
+            try
+            {
+                g_state.database.json_data = nlohmann::json::parse(json_str);
+            }
+            catch (const nlohmann::json::parse_error &e)
+            {
+                g_state.preview.json_preview = json_str;
+                g_state.preview.mode = PreviewMode::JSON;
+                return;
+            }
+
+            g_state.database.filename = node.name;
+
+            if (!g_state.database.json_data.is_array() || g_state.database.json_data.empty())
+            {
+                g_state.preview.json_preview = g_state.database.json_data.dump(2);
+                g_state.preview.mode = PreviewMode::JSON;
+                return;
+            }
+
+            if (g_state.database.json_data[0].is_object())
+            {
+                for (auto &el : g_state.database.json_data[0].items())
+                {
+                    g_state.database.column_names.push_back(el.key());
+                }
+
+                for (auto &row : g_state.database.json_data)
+                {
+                    if (row.is_object())
+                    {
+                        std::vector<std::string> row_data;
+                        for (const auto &col_name : g_state.database.column_names)
+                        {
+                            if (row.contains(col_name))
+                            {
+                                if (row[col_name].is_string())
+                                {
+                                    row_data.push_back(row[col_name].get<std::string>());
+                                }
+                                else if (row[col_name].is_number())
+                                {
+                                    row_data.push_back(row[col_name].dump());
+                                }
+                                else if (row[col_name].is_boolean())
+                                {
+                                    row_data.emplace_back(row[col_name].get<bool>() ? "true" : "false");
+                                }
+                                else if (row[col_name].is_null())
+                                {
+                                    row_data.emplace_back("NULL");
+                                }
+                                else
+                                {
+                                    row_data.push_back(row[col_name].dump());
+                                }
+                            }
+                            else
+                            {
+                                row_data.emplace_back("");
+                            }
+                        }
+                        g_state.database.rows.push_back(row_data);
+                    }
+                }
+                g_state.preview.mode = PreviewMode::DB;
+            }
+            else
+            {
+                g_state.preview.json_preview = g_state.database.json_data.dump(2);
+                g_state.preview.mode = PreviewMode::JSON;
+            }
+        }
+        catch (const std::exception &e)
+        {
+            g_state.preview.error = "DB parsing error: " + std::string(e.what());
+            g_state.preview.mode = PreviewMode::JSON;
+        }
+    }
+
+    void load_scsp_preview(const Core::FileNode &node)
+    {
+        try
+        {
+            g_state.preview.json_preview = "";
+            g_state.preview.mode = PreviewMode::None;
+
+            const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
+            if (file_data.empty())
+            {
+                g_state.preview.error = "Failed to read SCSP file";
+                return;
+            }
+
+            if (std::string json_str = SCSPParser::ConvertToJson(file_data); !json_str.empty())
+            {
+                try
+                {
+                    const nlohmann::json parsed = nlohmann::json::parse(json_str);
+                    g_state.preview.json_preview = parsed.dump(2);
+                }
+                catch (...)
+                {
+                    g_state.preview.json_preview = json_str;
+                }
+                g_state.preview.mode = PreviewMode::JSON;
+            }
+            else
+            {
+                g_state.preview.error = "Failed to parse SCSP file";
+            }
+
+            g_state.preview.error = "";
+        }
+        catch (const std::exception &e)
+        {
+            g_state.preview.error = "SCSP parsing error: " + std::string(e.what());
+            g_state.preview.mode = PreviewMode::None;
+        }
+    }
+
+    void load_text_preview(const Core::FileNode &node)
+    {
+        try
+        {
+            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
+            if (file_data.empty())
+            {
+                g_state.preview.text_preview = "Failed to read file";
+                g_state.preview.text_full = "";
+                g_state.preview.mode = PreviewMode::Text;
+                return;
+            }
+            g_state.preview.text_full = std::string(file_data.begin(), file_data.end());
+            g_state.preview.text_preview = g_state.preview.text_full;
+            g_state.text_viewer.text_buffer.assign(g_state.preview.text_full.begin(), g_state.preview.text_full.end());
+            g_state.text_viewer.text_buffer.push_back('\0');
+            if (g_state.preview.text_preview.length() > 20000)
+            {
+                g_state.preview.text_preview = g_state.preview.text_preview.substr(0, 20000) + "\n\n... (truncated)";
+            }
+            g_state.preview.mode = PreviewMode::Text;
+        }
+        catch (const std::exception &e)
+        {
+            g_state.preview.text_preview = "Error loading text: " + std::string(e.what());
+            g_state.preview.text_full = "";
+            g_state.preview.mode = PreviewMode::Text;
+        }
+    }
+
+    SDL_Surface *load_surface_from_node(const Core::FileNode &node, std::string &out_error)
+    {
+        if (!std::holds_alternative<Core::FileInfo>(node.data))
+        {
+            out_error = "Not a file";
+            return nullptr;
+        }
+        const auto &info = std::get<Core::FileInfo>(node.data);
+
+        if (!g_state.browser.data_pack)
+        {
+            out_error = "No pack opened";
+            return nullptr;
+        }
+
+        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
+        if (file_data.empty())
+        {
+            out_error = "Failed to read file data";
+            return nullptr;
+        }
+
+        if (is_sct_format(info.format))
+        {
+            try
+            {
+                std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data);
+                if (png_data.empty())
+                {
+                    out_error = "Failed to convert SCT/SCT2 file";
+                    return nullptr;
+                }
+                SDL_RWops *rw = SDL_RWFromMem(png_data.data(), static_cast<int>(png_data.size()));
+                if (!rw)
+                {
+                    out_error = "Failed to create memory stream for SCT";
+                    return nullptr;
+                }
+                SDL_Surface *surface = IMG_Load_RW(rw, 1);
+                if (!surface)
+                {
+                    out_error = "Failed to decode converted SCT image: " + std::string(IMG_GetError());
+                    return nullptr;
+                }
+                return surface;
+            }
+            catch (const std::exception &e)
+            {
+                out_error = "SCT parsing error: " + std::string(e.what());
+                return nullptr;
+            }
+        }
+        else
+        {
+            SDL_RWops *rw = SDL_RWFromMem(file_data.data(), static_cast<int>(file_data.size()));
+            if (!rw)
+            {
+                out_error = "Failed to create memory stream";
+                return nullptr;
+            }
+            SDL_Surface *surface = IMG_Load_RW(rw, 1);
+            if (!surface)
+            {
+                out_error = "Failed to decode image: " + std::string(IMG_GetError());
+                return nullptr;
+            }
+            return surface;
+        }
+    }
+
+    template <typename ConverterFunc>
+    void export_json_file(const Core::FileNode &node, const std::string &dialog_title, const std::string &format_name, ConverterFunc converter)
+    {
+        try
+        {
+            const std::string default_name = Core::ReplaceExtension(node.name, ".json");
+
+            if (const std::string save_path = DialogPaths::SaveFile(dialog_title, default_name, {"JSON Files", "*.json", "All Files", "*.*"}); !save_path.empty())
+            {
+                std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
+
+                if (std::string json_str = converter(file_data); !json_str.empty() && json_str != "{}")
+                {
+                    try
+                    {
+                        nlohmann::json parsed = nlohmann::json::parse(json_str);
+                        std::string formatted_json = parsed.dump(2);
+
+                        std::ofstream out(save_path);
+                        out << formatted_json;
+                        out.close();
+                        g_state.tasks.status = "Exported " + format_name + " to JSON: " + save_path;
+                    }
+                    catch (const nlohmann::json::parse_error &e)
+                    {
+                        std::ofstream out(save_path);
+                        out << json_str;
+                        out.close();
+                        g_state.tasks.status = "Exported " + format_name + " to JSON (unformatted): " + save_path;
+                    }
+                }
+                else
+                {
+                    g_state.tasks.status = "Failed to convert " + format_name + " to JSON";
+                }
+            }
+        }
+        catch (const std::exception &e)
+        {
+            g_state.tasks.status = "Export error: " + std::string(e.what());
+        }
+    }
+}
+
 void clear_preview()
 {
     if (g_state.preview.texture != 0)
@@ -35,291 +365,6 @@ void clear_preview()
     g_state.database.rows.clear();
     g_state.preview.mode = PreviewMode::None;
     g_state.preview.preview_node = nullptr;
-}
-
-void load_json_preview(const Core::FileNode &node, const std::string &content)
-{
-    try
-    {
-        g_state.preview.json_preview = "";
-        std::string json_content = content;
-
-        if (json_content.empty())
-        {
-            if (std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node); !file_data.empty())
-            {
-                json_content = std::string(file_data.begin(), file_data.end());
-            }
-            else
-            {
-                g_state.preview.error = "Failed to read JSON file";
-                g_state.preview.mode = PreviewMode::None;
-                return;
-            }
-        }
-
-        try
-        {
-            const nlohmann::json parsed = nlohmann::json::parse(json_content);
-            g_state.preview.json_preview = parsed.dump(2);
-        }
-        catch (...)
-        {
-            g_state.preview.json_preview = json_content;
-        }
-        g_state.preview.mode = PreviewMode::JSON;
-    }
-    catch (const std::exception &e)
-    {
-        g_state.preview.error = "Error loading JSON: " + std::string(e.what());
-        g_state.preview.mode = PreviewMode::None;
-    }
-}
-
-void load_db_preview(const Core::FileNode &node)
-{
-    try
-    {
-        g_state.database.column_names.clear();
-        g_state.database.rows.clear();
-        g_state.database.json_data.clear();
-        g_state.preview.json_preview = "";
-        g_state.preview.mode = PreviewMode::None;
-
-        const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-        if (file_data.empty())
-        {
-            g_state.preview.error = "Failed to read DB file";
-            return;
-        }
-
-        std::string json_str = DBParser::ConvertToJson(file_data);
-        if (json_str.empty() || json_str == "{}")
-        {
-            g_state.preview.json_preview = json_str;
-            g_state.preview.mode = PreviewMode::JSON;
-            return;
-        }
-
-        try
-        {
-            g_state.database.json_data = nlohmann::json::parse(json_str);
-        }
-        catch (const nlohmann::json::parse_error &e)
-        {
-            g_state.preview.json_preview = json_str;
-            g_state.preview.mode = PreviewMode::JSON;
-            return;
-        }
-
-        g_state.database.filename = node.name;
-
-        if (!g_state.database.json_data.is_array() || g_state.database.json_data.empty())
-        {
-            g_state.preview.json_preview = g_state.database.json_data.dump(2);
-            g_state.preview.mode = PreviewMode::JSON;
-            return;
-        }
-
-        if (g_state.database.json_data[0].is_object())
-        {
-            for (auto &el : g_state.database.json_data[0].items())
-            {
-                g_state.database.column_names.push_back(el.key());
-            }
-
-            for (auto &row : g_state.database.json_data)
-            {
-                if (row.is_object())
-                {
-                    std::vector<std::string> row_data;
-                    for (const auto &col_name : g_state.database.column_names)
-                    {
-                        if (row.contains(col_name))
-                        {
-                            if (row[col_name].is_string())
-                            {
-                                row_data.push_back(row[col_name].get<std::string>());
-                            }
-                            else if (row[col_name].is_number())
-                            {
-                                row_data.push_back(row[col_name].dump());
-                            }
-                            else if (row[col_name].is_boolean())
-                            {
-                                row_data.emplace_back(row[col_name].get<bool>() ? "true" : "false");
-                            }
-                            else if (row[col_name].is_null())
-                            {
-                                row_data.emplace_back("NULL");
-                            }
-                            else
-                            {
-                                row_data.push_back(row[col_name].dump());
-                            }
-                        }
-                        else
-                        {
-                            row_data.emplace_back("");
-                        }
-                    }
-                    g_state.database.rows.push_back(row_data);
-                }
-            }
-            g_state.preview.mode = PreviewMode::DB;
-        }
-        else
-        {
-            g_state.preview.json_preview = g_state.database.json_data.dump(2);
-            g_state.preview.mode = PreviewMode::JSON;
-        }
-    }
-    catch (const std::exception &e)
-    {
-        g_state.preview.error = "DB parsing error: " + std::string(e.what());
-        g_state.preview.mode = PreviewMode::JSON;
-    }
-}
-
-void load_scsp_preview(const Core::FileNode &node)
-{
-    try
-    {
-        g_state.preview.json_preview = "";
-        g_state.preview.mode = PreviewMode::None;
-
-        const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-        if (file_data.empty())
-        {
-            g_state.preview.error = "Failed to read SCSP file";
-            return;
-        }
-
-        if (std::string json_str = SCSPParser::ConvertToJson(file_data); !json_str.empty())
-        {
-            try
-            {
-                const nlohmann::json parsed = nlohmann::json::parse(json_str);
-                g_state.preview.json_preview = parsed.dump(2);
-            }
-            catch (...)
-            {
-                g_state.preview.json_preview = json_str;
-            }
-            g_state.preview.mode = PreviewMode::JSON;
-        }
-        else
-        {
-            g_state.preview.error = "Failed to parse SCSP file";
-        }
-
-        g_state.preview.error = "";
-    }
-    catch (const std::exception &e)
-    {
-        g_state.preview.error = "SCSP parsing error: " + std::string(e.what());
-        g_state.preview.mode = PreviewMode::None;
-    }
-}
-
-void load_text_preview(const Core::FileNode &node)
-{
-    try
-    {
-        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-        if (file_data.empty())
-        {
-            g_state.preview.text_preview = "Failed to read file";
-            g_state.preview.text_full = "";
-            g_state.preview.mode = PreviewMode::Text;
-            return;
-        }
-        g_state.preview.text_full = std::string(file_data.begin(), file_data.end());
-        g_state.preview.text_preview = g_state.preview.text_full;
-        g_state.text_viewer.text_buffer.assign(g_state.preview.text_full.begin(), g_state.preview.text_full.end());
-        g_state.text_viewer.text_buffer.push_back('\0');
-        if (g_state.preview.text_preview.length() > 20000)
-        {
-            g_state.preview.text_preview = g_state.preview.text_preview.substr(0, 20000) + "\n\n... (truncated)";
-        }
-        g_state.preview.mode = PreviewMode::Text;
-    }
-    catch (const std::exception &e)
-    {
-        g_state.preview.text_preview = "Error loading text: " + std::string(e.what());
-        g_state.preview.text_full = "";
-        g_state.preview.mode = PreviewMode::Text;
-    }
-}
-
-SDL_Surface *load_surface_from_node(const Core::FileNode &node, std::string &out_error)
-{
-    if (!std::holds_alternative<Core::FileInfo>(node.data))
-    {
-        out_error = "Not a file";
-        return nullptr;
-    }
-    const auto &info = std::get<Core::FileInfo>(node.data);
-
-    if (!g_state.browser.data_pack)
-    {
-        out_error = "No pack opened";
-        return nullptr;
-    }
-
-    std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-    if (file_data.empty())
-    {
-        out_error = "Failed to read file data";
-        return nullptr;
-    }
-
-    if (is_sct_format(info.format))
-    {
-        try
-        {
-            std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(file_data, false);
-            if (png_data.empty())
-            {
-                out_error = "Failed to convert SCT/SCT2 file";
-                return nullptr;
-            }
-            SDL_RWops *rw = SDL_RWFromMem(png_data.data(), static_cast<int>(png_data.size()));
-            if (!rw)
-            {
-                out_error = "Failed to create memory stream for SCT";
-                return nullptr;
-            }
-            SDL_Surface *surface = IMG_Load_RW(rw, 1);
-            if (!surface)
-            {
-                out_error = "Failed to decode converted SCT image: " + std::string(IMG_GetError());
-                return nullptr;
-            }
-            return surface;
-        }
-        catch (const std::exception &e)
-        {
-            out_error = "SCT parsing error: " + std::string(e.what());
-            return nullptr;
-        }
-    }
-    else
-    {
-        SDL_RWops *rw = SDL_RWFromMem(file_data.data(), static_cast<int>(file_data.size()));
-        if (!rw)
-        {
-            out_error = "Failed to create memory stream";
-            return nullptr;
-        }
-        SDL_Surface *surface = IMG_Load_RW(rw, 1);
-        if (!surface)
-        {
-            out_error = "Failed to decode image: " + std::string(IMG_GetError());
-            return nullptr;
-        }
-        return surface;
-    }
 }
 
 void load_preview(const Core::FileNode &node)
@@ -538,7 +583,7 @@ void export_file_as_png(const Core::FileNode &node)
 
             if (is_sct_format(info.format))
             {
-                png_data = SCTParser::ConvertToPNG(file_data, false);
+                png_data = SCTParser::ConvertToPNG(file_data);
             }
             else
             {
@@ -579,84 +624,14 @@ void export_file_as_sct(const Core::FileNode &node)
     }
 }
 
-template <typename ConverterFunc>
-static void export_converted_json_file(const Core::FileNode &node, const std::string &dialog_title, const std::string &format_name, ConverterFunc converter)
-{
-    try
-    {
-        const std::string default_name = Core::ReplaceExtension(node.name, ".json");
-
-        if (const std::string save_path = DialogPaths::SaveFile(dialog_title, default_name, {"JSON Files", "*.json", "All Files", "*.*"}); !save_path.empty())
-        {
-            std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-
-            if (std::string json_str = converter(file_data); !json_str.empty() && json_str != "{}")
-            {
-                try
-                {
-                    nlohmann::json parsed = nlohmann::json::parse(json_str);
-                    std::string formatted_json = parsed.dump(2);
-
-                    std::ofstream out(save_path);
-                    out << formatted_json;
-                    out.close();
-                    g_state.tasks.status = "Exported " + format_name + " to JSON: " + save_path;
-                }
-                catch (const nlohmann::json::parse_error &e)
-                {
-                    std::ofstream out(save_path);
-                    out << json_str;
-                    out.close();
-                    g_state.tasks.status = "Exported " + format_name + " to JSON (unformatted): " + save_path;
-                }
-            }
-            else
-            {
-                g_state.tasks.status = "Failed to convert " + format_name + " to JSON";
-            }
-        }
-    }
-    catch (const std::exception &e)
-    {
-        g_state.tasks.status = "Export error: " + std::string(e.what());
-    }
-}
-
 void export_db_as_json_file(const Core::FileNode &node)
 {
-    export_converted_json_file(node, "Export DB as JSON", "DB", DBParser::ConvertToJson);
+    export_json_file(node, "Export DB as JSON", "DB", DBParser::ConvertToJson);
 }
 
 void export_scsp_as_json_file(const Core::FileNode &node)
 {
-    export_converted_json_file(node, "Export SCSP as JSON", "SCSP", SCSPParser::ConvertToJson);
-}
-
-void export_json_file(const Core::FileNode &node)
-{
-    try
-    {
-        const std::string default_name = Core::ReplaceExtension(node.name, ".json");
-
-        if (const std::string save_path = DialogPaths::SaveFile("Export JSON", default_name, {"JSON Files", "*.json", "All Files", "*.*"}); !save_path.empty())
-        {
-            const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
-            if (file_data.empty())
-            {
-                g_state.tasks.status = "Failed to read JSON file";
-                return;
-            }
-
-            std::ofstream out(save_path, std::ios::binary);
-            out.write(reinterpret_cast<const char *>(file_data.data()), file_data.size());
-            out.close();
-            g_state.tasks.status = "Exported JSON: " + save_path;
-        }
-    }
-    catch (const std::exception &e)
-    {
-        g_state.tasks.status = "Export error: " + std::string(e.what());
-    }
+    export_json_file(node, "Export SCSP as JSON", "SCSP", SCSPParser::ConvertToJson);
 }
 
 void draw_preview_panel(nk_context *ctx, float right_width, float content_height)

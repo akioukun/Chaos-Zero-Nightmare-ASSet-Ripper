@@ -10,7 +10,6 @@
 
 #include <SDL.h>
 #include <SDL_image.h>
-#include <cstring>
 #include <algorithm>
 
 // spine-cpp requires this global function
@@ -27,7 +26,7 @@ void PackTextureLoader::registerTexture(const std::string& name, GLuint textureI
 }
 
 void PackTextureLoader::load(spine::AtlasPage& page, const spine::String& path) {
-    std::string name(path.buffer());
+    const std::string name(path.buffer());
 
     // Try exact match first
     auto it = textures.find(name);
@@ -51,7 +50,7 @@ void PackTextureLoader::load(spine::AtlasPage& page, const spine::String& path) 
     }
 
     if (it != textures.end()) {
-        page.setRendererObject((void*)(uintptr_t)it->second.id);
+        page.setRendererObject(reinterpret_cast<void *>(static_cast<uintptr_t>(it->second.id)));
         page.width = it->second.width;
         page.height = it->second.height;
     }
@@ -69,47 +68,49 @@ void PackTextureLoader::clearTextures() {
 // SpineBatchRenderer
 // ============================================================================
 
-static const char* vertSrc = R"(
-#version 330 core
-layout(location=0) in vec2 aPos;
-layout(location=1) in vec2 aUV;
-layout(location=2) in vec4 aColor;
-uniform mat4 uProj;
-out vec2 vUV;
-out vec4 vColor;
-void main() {
-    gl_Position = uProj * vec4(aPos, 0.0, 1.0);
-    vUV = aUV;
-    vColor = aColor;
-}
-)";
+namespace {
+    auto vertSrc = R"(
+        #version 330 core
+        layout(location=0) in vec2 aPos;
+        layout(location=1) in vec2 aUV;
+        layout(location=2) in vec4 aColor;
+        uniform mat4 uProj;
+        out vec2 vUV;
+        out vec4 vColor;
+        void main() {
+            gl_Position = uProj * vec4(aPos, 0.0, 1.0);
+            vUV = aUV;
+            vColor = aColor;
+        }
+    )";
 
-static const char* fragSrc = R"(
-#version 330 core
-in vec2 vUV;
-in vec4 vColor;
-uniform sampler2D uTex;
-out vec4 FragColor;
-void main() {
-    FragColor = texture(uTex, vUV) * vColor;
-}
-)";
+    auto fragSrc = R"(
+        #version 330 core
+        in vec2 vUV;
+        in vec4 vColor;
+        uniform sampler2D uTex;
+        out vec4 FragColor;
+        void main() {
+            FragColor = texture(uTex, vUV) * vColor;
+        }
+    )";
 
-static GLuint compileShader(GLenum type, const char* src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    return s;
+    GLuint compileShader(const GLenum type, const char* src) {
+        const GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        return s;
+    }
 }
 
-SpineBatchRenderer::SpineBatchRenderer() {}
+SpineBatchRenderer::SpineBatchRenderer() = default;
 SpineBatchRenderer::~SpineBatchRenderer() { dispose(); }
 
 void SpineBatchRenderer::init() {
     if (initialized) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER, vertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragSrc);
+    const GLuint vs = compileShader(GL_VERTEX_SHADER, vertSrc);
+    const GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragSrc);
     shaderProgram = glCreateProgram();
     glAttachShader(shaderProgram, vs);
     glAttachShader(shaderProgram, fs);
@@ -129,13 +130,13 @@ void SpineBatchRenderer::init() {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
 
     // pos
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), static_cast<void *>(nullptr));
     glEnableVertexAttribArray(0);
     // uv
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(2 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
     // color
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(4 * sizeof(float)));
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(4 * sizeof(float)));
     glEnableVertexAttribArray(2);
 
     glBindVertexArray(0);
@@ -151,8 +152,8 @@ void SpineBatchRenderer::dispose() {
     initialized = false;
 }
 
-void SpineBatchRenderer::begin(float proj[16], bool pma) {
-    memcpy(currentProj, proj, sizeof(float) * 16);
+void SpineBatchRenderer::begin(float projMatrix[16], const bool pma) {
+    memcpy(currentProj, projMatrix, sizeof(float) * 16);
     currentPMA = pma;
     batchVertices.clear();
     batchIndices.clear();
@@ -160,20 +161,18 @@ void SpineBatchRenderer::begin(float proj[16], bool pma) {
     currentBlend = spine::BlendMode_Normal;
 }
 
-void SpineBatchRenderer::addTriangles(GLuint texture, const float* vertices, int vertexCount,
-                                       const unsigned short* indices, int indexCount,
-                                       spine::BlendMode blendMode) {
+void SpineBatchRenderer::addTriangles(const GLuint texture, const float* vertices, const int vertexCount, const unsigned short* indices, const int indexCount, const spine::BlendMode blendMode) {
     if (texture != currentTexture || blendMode != currentBlend) {
         flush();
         currentTexture = texture;
         currentBlend = blendMode;
     }
 
-    unsigned short baseVertex = (unsigned short)batchVertices.size();
+    const auto baseVertex = static_cast<unsigned short>(batchVertices.size());
     // vertices come as: x, y, u, v, r, g, b, a (stride 8)
     for (int i = 0; i < vertexCount; i++) {
-        Vertex v;
-        int off = i * 8;
+        Vertex v{};
+        const int off = i * 8;
         v.x = vertices[off + 0];
         v.y = vertices[off + 1];
         v.u = vertices[off + 2];
@@ -223,7 +222,7 @@ void SpineBatchRenderer::flush() {
         }
     }
 
-    glDrawElements(GL_TRIANGLES, (GLsizei)batchIndices.size(), GL_UNSIGNED_SHORT, 0);
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(batchIndices.size()), GL_UNSIGNED_SHORT, 0);
 
     glBindVertexArray(0);
     batchVertices.clear();
@@ -238,7 +237,7 @@ void SpineBatchRenderer::end() {
 // SpineViewer
 // ============================================================================
 
-SpineViewer::SpineViewer() {}
+SpineViewer::SpineViewer() = default;
 
 SpineViewer::~SpineViewer() {
     unload();
@@ -278,14 +277,14 @@ GLuint SpineViewer::loadTextureFromRGBA(const unsigned char* data, int width, in
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     if (premultiplyTextures) {
-        size_t pixelCount = (size_t)width * height;
+        const size_t pixelCount = static_cast<size_t>(width) * height;
         std::vector<unsigned char> pma(pixelCount * 4);
         for (size_t i = 0; i < pixelCount; i++) {
-            unsigned int a = data[i * 4 + 3];
-            pma[i * 4 + 0] = (unsigned char)((data[i * 4 + 0] * a + 127) / 255);
-            pma[i * 4 + 1] = (unsigned char)((data[i * 4 + 1] * a + 127) / 255);
-            pma[i * 4 + 2] = (unsigned char)((data[i * 4 + 2] * a + 127) / 255);
-            pma[i * 4 + 3] = (unsigned char)a;
+            const unsigned int a = data[i * 4 + 3];
+            pma[i * 4 + 0] = static_cast<unsigned char>((data[i * 4 + 0] * a + 127) / 255);
+            pma[i * 4 + 1] = static_cast<unsigned char>((data[i * 4 + 1] * a + 127) / 255);
+            pma[i * 4 + 2] = static_cast<unsigned char>((data[i * 4 + 2] * a + 127) / 255);
+            pma[i * 4 + 3] = static_cast<unsigned char>(a);
         }
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pma.data());
     } else {
@@ -318,8 +317,7 @@ bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, cons
     // 2. Read atlas text
     std::string atlasStr;
     if (entry.atlas_node) {
-        std::vector<uint8_t> atlasData = pack.GetFileData(*entry.atlas_node);
-        if (!atlasData.empty()) {
+        if (std::vector<uint8_t> atlasData = pack.GetFileData(*entry.atlas_node); !atlasData.empty()) {
             atlasStr = std::string(atlasData.begin(), atlasData.end());
         }
     }
@@ -345,12 +343,12 @@ bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, cons
 
         try {
             if (ext == ".sct" || ext == ".sct2") {
-                SCTParser::RGBAImage rgba = SCTParser::ConvertToRGBA(fileData);
-                if (rgba.data.empty()) { LogError("SpineViewer: SCT decode failed for " + imgNode->name); continue; }
-                w = rgba.width; h = rgba.height;
-                tex = loadTextureFromRGBA(rgba.data.data(), w, h);
+                auto [data, width, height] = SCTParser::ConvertToRGBA(fileData);
+                if (data.empty()) { LogError("SpineViewer: SCT decode failed for " + imgNode->name); continue; }
+                w = width; h = height;
+                tex = loadTextureFromRGBA(data.data(), w, h);
             } else {
-                SDL_RWops* rw = SDL_RWFromMem(fileData.data(), (int)fileData.size());
+                SDL_RWops* rw = SDL_RWFromMem(fileData.data(), static_cast<int>(fileData.size()));
                 if (!rw) continue;
                 SDL_Surface* surface = IMG_Load_RW(rw, 1);
                 if (!surface) { LogError("SpineViewer: IMG_Load failed for " + imgNode->name); continue; }
@@ -358,7 +356,7 @@ bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, cons
                 SDL_FreeSurface(surface);
                 if (!rgba) continue;
                 w = rgba->w; h = rgba->h;
-                tex = loadTextureFromRGBA((const unsigned char*)rgba->pixels, w, h);
+                tex = loadTextureFromRGBA(static_cast<const unsigned char *>(rgba->pixels), w, h);
                 SDL_FreeSurface(rgba);
             }
         } catch (const std::exception& e) {
@@ -369,8 +367,7 @@ bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, cons
         if (tex) {
             textureLoader.registerTexture(imgNode->name, tex, w, h);
             std::string pngName = imgNode->name;
-            size_t dotPos = pngName.rfind('.');
-            if (dotPos != std::string::npos) {
+            if (size_t dotPos = pngName.rfind('.'); dotPos != std::string::npos) {
                 std::string baseName = pngName.substr(0, dotPos);
                 textureLoader.registerTexture(baseName + ".png", tex, w, h);
             }
@@ -445,8 +442,7 @@ bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, cons
         stateData->setDefaultMix(0.2f);
         animState = new spine::AnimationState(stateData);
 
-        auto& anims = skeletonData->getAnimations();
-        if (anims.size() > 0) {
+        if (auto& anims = skeletonData->getAnimations(); anims.size() > 0) {
             animState->setAnimation(0, anims[0]->getName(), true);
         }
     } catch (const std::exception& e) {
@@ -499,13 +495,13 @@ void SpineViewer::computeStableBounds() {
     panX = panY = 0;
 }
 
-void SpineViewer::screenToWorld(float sx, float sy, int vpW, int vpH, float& wx, float& wy) {
-    float padX = cachedBoundsW * 0.1f;
-    float padY = cachedBoundsH * 0.1f;
-    float left = cachedBoundsX - padX - panX;
-    float right = cachedBoundsX + cachedBoundsW + padX - panX;
-    float bottom = cachedBoundsY - padY - panY;
-    float top = cachedBoundsY + cachedBoundsH + padY - panY;
+void SpineViewer::screenToWorld(const float sx, const float sy, const int vpW, const int vpH, float& wx, float& wy) const {
+    const float padX = cachedBoundsW * 0.1f;
+    const float padY = cachedBoundsH * 0.1f;
+    const float left = cachedBoundsX - padX - panX;
+    const float right = cachedBoundsX + cachedBoundsW + padX - panX;
+    const float bottom = cachedBoundsY - padY - panY;
+    const float top = cachedBoundsY + cachedBoundsH + padY - panY;
 
     float cx = (left + right) / 2.0f;
     float cy = (bottom + top) / 2.0f;
@@ -513,9 +509,8 @@ void SpineViewer::screenToWorld(float sx, float sy, int vpW, int vpH, float& wx,
     float hh = (top - bottom) / (2.0f * zoom);
 
     // Maintain aspect ratio
-    float viewAspect = (float)vpW / vpH;
-    float boundsAspect = hw / hh;
-    if (boundsAspect > viewAspect) {
+    const float viewAspect = static_cast<float>(vpW) / vpH;
+    if (const float boundsAspect = hw / hh; boundsAspect > viewAspect) {
         hh = hw / viewAspect;
     } else {
         hw = hh * viewAspect;
@@ -525,7 +520,7 @@ void SpineViewer::screenToWorld(float sx, float sy, int vpW, int vpH, float& wx,
     wy = cy + hh - (sy / vpH) * 2.0f * hh; // Y flipped
 }
 
-std::string SpineViewer::hitTestBone(float screenX, float screenY, int vpW, int vpH) {
+std::string SpineViewer::hitTestBone(const float screenX, const float screenY, const int vpW, const int vpH) {
     if (!skeleton) return "";
 
     float wx, wy;
@@ -537,15 +532,14 @@ std::string SpineViewer::hitTestBone(float screenX, float screenY, int vpW, int 
     int bestIdx = -1;
 
     for (size_t i = 0; i < bones.size(); i++) {
-        float bx = bones[i]->getWorldX();
-        float by = bones[i]->getWorldY();
-        float dx = wx - bx;
-        float dy = wy - by;
-        float dist = sqrtf(dx * dx + dy * dy);
-        if (dist < bestDist) {
+        const float bx = bones[i]->getWorldX();
+        const float by = bones[i]->getWorldY();
+        const float dx = wx - bx;
+        const float dy = wy - by;
+        if (const float dist = sqrtf(dx * dx + dy * dy); dist < bestDist) {
             bestDist = dist;
             bestName = std::string(bones[i]->getData().getName().buffer());
-            bestIdx = (int)i;
+            bestIdx = static_cast<int>(i);
         }
     }
 
@@ -559,22 +553,17 @@ void SpineViewer::update(float deltaTime) {
         skeleton->setScaleX(flipX ? -1.0f : 1.0f);
         skeleton->setScaleY(flipY ? -1.0f : 1.0f);
 
-        // Always advance and apply animation (even if deltaTime is 0 when paused)
-        // so that the pose is valid for override application
         if (deltaTime > 0) {
             animState->update(deltaTime);
         }
         animState->apply(*skeleton);
 
-        // Autoplay: advance to next animation when current one completes
         if (autoplayNext && deltaTime > 0) {
-            spine::TrackEntry* track = animState->getCurrent(0);
-            if (track && !track->getLoop() && track->isComplete()) {
+            if (spine::TrackEntry* track = animState->getCurrent(0); track && !track->getLoop() && track->isComplete()) {
                 nextAnimation();
             }
         }
 
-        // Apply bone overrides on top of animation
         applyBoneOverrides();
 
         skeleton->updateWorldTransform();
@@ -588,8 +577,7 @@ void SpineViewer::update(float deltaTime) {
 void SpineViewer::applyBoneOverrides() {
     if (!skeleton) return;
     for (auto& [name, ovr] : boneOverrides) {
-        spine::Bone* bone = skeleton->findBone(spine::String(name.c_str()));
-        if (bone) {
+        if (spine::Bone* bone = skeleton->findBone(spine::String(name.c_str()))) {
             bone->setX(ovr.x);
             bone->setY(ovr.y);
             bone->setRotation(ovr.rotation);
@@ -649,9 +637,8 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
     }
 
     // Maintain aspect ratio
-    float viewAspect = (float)viewportWidth / viewportHeight;
-    float boundsAspect = (right - left) / (top - bottom);
-    if (boundsAspect > viewAspect) {
+    float viewAspect = static_cast<float>(viewportWidth) / viewportHeight;
+    if (float boundsAspect = (right - left) / (top - bottom); boundsAspect > viewAspect) {
         float extra = (right - left) / viewAspect - (top - bottom);
         bottom -= extra / 2;
         top += extra / 2;
@@ -709,13 +696,13 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
         static float worldVertices[8192];
 
         if (attachment->getRTTI().isExactly(spine::RegionAttachment::rtti)) {
-            auto* region = static_cast<spine::RegionAttachment*>(attachment);
+            auto* region = dynamic_cast<spine::RegionAttachment*>(attachment);
 
-            auto* atlasRegion = (spine::AtlasRegion*)region->getRendererObject();
+            auto* atlasRegion = static_cast<spine::AtlasRegion *>(region->getRendererObject());
             if (!atlasRegion || !atlasRegion->page || !atlasRegion->page->getRendererObject())
                 continue; // skip — no texture loaded for this attachment
 
-            texture = (GLuint)(uintptr_t)atlasRegion->page->getRendererObject();
+            texture = static_cast<GLuint>(reinterpret_cast<uintptr_t>(atlasRegion->page->getRendererObject()));
             region->computeWorldVertices(slot->getBone(), worldVertices, 0, 2);
 
             static float regionVerts[8 * 4];
@@ -743,17 +730,17 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
             batchRenderer.addTriangles(texture, regionVerts, 4, regionIndices, 6, blendMode);
 
         } else if (attachment->getRTTI().isExactly(spine::MeshAttachment::rtti)) {
-            auto* mesh = static_cast<spine::MeshAttachment*>(attachment);
+            auto* mesh = dynamic_cast<spine::MeshAttachment*>(attachment);
 
-            auto* atlasRegion = (spine::AtlasRegion*)mesh->getRendererObject();
+            auto* atlasRegion = static_cast<spine::AtlasRegion *>(mesh->getRendererObject());
             if (!atlasRegion || !atlasRegion->page || !atlasRegion->page->getRendererObject())
                 continue; // skip — no texture loaded
 
-            texture = (GLuint)(uintptr_t)atlasRegion->page->getRendererObject();
+            texture = static_cast<GLuint>(reinterpret_cast<uintptr_t>(atlasRegion->page->getRendererObject()));
 
             auto& meshIndices = mesh->getTriangles();
             auto& uvs = mesh->getUVs();
-            int meshVertCount = (int)mesh->getWorldVerticesLength() / 2;
+            int meshVertCount = static_cast<int>(mesh->getWorldVerticesLength()) / 2;
 
             mesh->computeWorldVertices(*slot, 0, mesh->getWorldVerticesLength(), worldVertices, 0, 2);
 
@@ -778,11 +765,10 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
                 meshVerts[j * 8 + 7] = a;
             }
 
-            batchRenderer.addTriangles(texture, meshVerts.data(), meshVertCount,
-                                        meshIndices.buffer(), (int)meshIndices.size(), blendMode);
+            batchRenderer.addTriangles(texture, meshVerts.data(), meshVertCount,meshIndices.buffer(), static_cast<int>(meshIndices.size()), blendMode);
 
         } else if (attachment->getRTTI().isExactly(spine::ClippingAttachment::rtti)) {
-            auto* clip = static_cast<spine::ClippingAttachment*>(attachment);
+            auto* clip = dynamic_cast<spine::ClippingAttachment*>(attachment);
             clipper.clipStart(*slot, clip);
             continue;
         }
@@ -798,8 +784,8 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
 
     // Draw transform gizmo on selected bone
     if (selectedBoneIndex >= 0) {
-        GizmoState gs = getSelectedBoneGizmo();
-        if (gs.valid) {
+        auto [bboxMinX, bboxMinY, bboxMaxX, bboxMaxY, valid] = getSelectedBoneGizmo();
+        if (valid) {
             // 1x1 white texture for drawing lines/rects
             static GLuint gizmoTex = 0;
             if (!gizmoTex) {
@@ -812,19 +798,21 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
             }
             unsigned short qi[] = { 0,1,2, 2,3,0 };
 
-            float lineW = (gs.bboxMaxX - gs.bboxMinX) * 0.005f;
+            float lineW = (bboxMaxX - bboxMinX) * 0.005f;
             if (lineW < 0.5f) lineW = 0.5f;
 
             // Box outline color (cyan)
             float lr = 0.0f, lg = 0.85f, lb = 1.0f, la = 0.8f;
             if (usePMA) { lr *= la; lg *= la; lb *= la; }
 
-            auto drawLine = [&](float x1, float y1, float x2, float y2) {
-                float dx = x2 - x1, dy = y2 - y1;
-                float len = sqrtf(dx*dx + dy*dy);
+            auto drawLine = [&](const float x1, const float y1, const float x2, const float y2) {
+                const float dx = x2 - x1;
+                const float dy = y2 - y1;
+                const float len = sqrtf(dx*dx + dy*dy);
                 if (len < 0.001f) return;
-                float nx = -dy / len * lineW, ny = dx / len * lineW;
-                float v[] = {
+                const float nx = -dy / len * lineW;
+                const float ny = dx / len * lineW;
+                const float v[] = {
                     x1-nx, y1-ny, 0,0, lr,lg,lb,la,
                     x1+nx, y1+ny, 1,0, lr,lg,lb,la,
                     x2+nx, y2+ny, 1,1, lr,lg,lb,la,
@@ -833,7 +821,7 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
                 batchRenderer.addTriangles(gizmoTex, v, 4, qi, 6, spine::BlendMode_Normal);
             };
 
-            float x0 = gs.bboxMinX, y0 = gs.bboxMinY, x1 = gs.bboxMaxX, y1 = gs.bboxMaxY;
+            float x0 = bboxMinX, y0 = bboxMinY, x1 = bboxMaxX, y1 = bboxMaxY;
 
             // Bounding box edges
             drawLine(x0, y0, x1, y0); // bottom
@@ -847,7 +835,7 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
             float hr = 1.0f, hg = 1.0f, hb = 1.0f, ha = 0.9f;
             if (usePMA) { hr *= ha; hg *= ha; hb *= ha; }
 
-            auto drawHandle = [&](float cx, float cy) {
+            auto drawHandle = [&](const float cx, const float cy) {
                 float v[] = {
                     cx-hs, cy-hs, 0,0, hr,hg,hb,ha,
                     cx+hs, cy-hs, 1,0, hr,hg,hb,ha,
@@ -872,8 +860,8 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
             float circR = hs * 1.5f;
             int segs = 10;
             for (int s = 0; s < segs; s++) {
-                float a1 = (float)s / segs * 6.2832f;
-                float a2 = (float)(s + 1) / segs * 6.2832f;
+                float a1 = static_cast<float>(s) / segs * 6.2832f;
+                float a2 = static_cast<float>(s + 1) / segs * 6.2832f;
                 float v[] = {
                     rotX, rotY, 0.5f, 0.5f, rr,rg,rb,ra,
                     rotX + cosf(a1)*circR, rotY + sinf(a1)*circR, 0,0, rr,rg,rb,ra,
@@ -885,8 +873,7 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
             }
 
             // Center crosshair at bone position
-            auto& bonez = skeleton->getBones();
-            if (selectedBoneIndex < (int)bonez.size()) {
+            if (auto& bonez = skeleton->getBones(); selectedBoneIndex < static_cast<int>(bonez.size())) {
                 float bx = bonez[selectedBoneIndex]->getWorldX();
                 float by = bonez[selectedBoneIndex]->getWorldY();
                 float cs = hs * 2;
@@ -905,7 +892,7 @@ void SpineViewer::render(int viewportWidth, int viewportHeight) {
     if (prevDepth) glEnable(GL_DEPTH_TEST);
 }
 
-void SpineViewer::ensureFBO(int width, int height) {
+void SpineViewer::ensureFBO(const int width, const int height) {
     if (fbo && fboWidth == width && fboHeight == height) return;
     cleanupFBO();
 
@@ -958,7 +945,7 @@ void SpineViewer::setAnimation(const std::string& name, bool loop) {
     auto& anims = skeletonData->getAnimations();
     for (size_t i = 0; i < anims.size(); i++) {
         if (std::string(anims[i]->getName().buffer()) == name) {
-            currentAnimIndex = (int)i;
+            currentAnimIndex = static_cast<int>(i);
             break;
         }
     }
@@ -972,7 +959,7 @@ void SpineViewer::nextAnimation() {
     animState->setAnimation(0, anims[currentAnimIndex]->getName(), !autoplayNext);
 }
 
-void SpineViewer::setSkin(const std::string& name) {
+void SpineViewer::setSkin(const std::string& name) const {
     if (!skeleton) return;
     skeleton->setSkin(spine::String(name.c_str()));
     skeleton->setSlotsToSetupPose();
@@ -1065,7 +1052,7 @@ SpineViewer::GizmoState SpineViewer::getSelectedBoneGizmo() const {
     if (!skeleton || selectedBoneIndex < 0) return gs;
 
     auto& bones = skeleton->getBones();
-    if (selectedBoneIndex >= (int)bones.size()) return gs;
+    if (selectedBoneIndex >= static_cast<int>(bones.size())) return gs;
     spine::Bone* selBone = bones[selectedBoneIndex];
 
     float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
@@ -1082,12 +1069,12 @@ SpineViewer::GizmoState SpineViewer::getSelectedBoneGizmo() const {
 
         int vertCount = 0;
         if (att->getRTTI().isExactly(spine::RegionAttachment::rtti)) {
-            auto* reg = static_cast<spine::RegionAttachment*>(att);
+            auto* reg = dynamic_cast<spine::RegionAttachment*>(att);
             reg->computeWorldVertices(slot->getBone(), worldVerts, 0, 2);
             vertCount = 4;
         } else if (att->getRTTI().isExactly(spine::MeshAttachment::rtti)) {
-            auto* mesh = static_cast<spine::MeshAttachment*>(att);
-            vertCount = (int)mesh->getWorldVerticesLength() / 2;
+            auto* mesh = dynamic_cast<spine::MeshAttachment*>(att);
+            vertCount = static_cast<int>(mesh->getWorldVerticesLength()) / 2;
             mesh->computeWorldVertices(*slot, 0, mesh->getWorldVerticesLength(), worldVerts, 0, 2);
         }
 
@@ -1125,7 +1112,7 @@ SpineViewer::GizmoHandle SpineViewer::hitTestGizmo(float screenX, float screenY,
     if (handleSz < 3) handleSz = 3;
 
     // Corner handles (scale)
-    auto inHandle = [&](float hx, float hy) {
+    auto inHandle = [&](const float hx, const float hy) {
         return fabsf(wx - hx) < handleSz && fabsf(wy - hy) < handleSz;
     };
     if (inHandle(gs.bboxMinX, gs.bboxMaxY)) return GizmoHandle::ScaleTL;
@@ -1134,8 +1121,8 @@ SpineViewer::GizmoHandle SpineViewer::hitTestGizmo(float screenX, float screenY,
     if (inHandle(gs.bboxMaxX, gs.bboxMinY)) return GizmoHandle::ScaleBR;
 
     // Rotate handle (outside top-right corner)
-    float rotX = gs.bboxMaxX + handleSz * 3, rotY = gs.bboxMaxY + handleSz * 3;
-    if (fabsf(wx - rotX) < handleSz * 1.5f && fabsf(wy - rotY) < handleSz * 1.5f)
+    const float rotY = gs.bboxMaxY + handleSz * 3;
+    if (const float rotX = gs.bboxMaxX + handleSz * 3; fabsf(wx - rotX) < handleSz * 1.5f && fabsf(wy - rotY) < handleSz * 1.5f)
         return GizmoHandle::Rotate;
 
     // Inside bbox = move
@@ -1169,7 +1156,7 @@ std::vector<SpineViewer::TextureInfo> SpineViewer::getTextureList() const {
         ti.name = std::string(pages[i]->name.buffer());
         ti.width = pages[i]->width;
         ti.height = pages[i]->height;
-        ti.glId = (GLuint)(uintptr_t)pages[i]->getRendererObject();
+        ti.glId = static_cast<GLuint>(reinterpret_cast<uintptr_t>(pages[i]->getRendererObject()));
         list.push_back(ti);
     }
     return list;
@@ -1187,7 +1174,7 @@ bool SpineViewer::swapTexture(const std::string& pageName, const std::string& pn
     SDL_FreeSurface(surface);
     if (!rgba) return false;
 
-    GLuint newTex = loadTextureFromRGBA((const unsigned char*)rgba->pixels, rgba->w, rgba->h);
+    GLuint newTex = loadTextureFromRGBA(static_cast<const unsigned char *>(rgba->pixels), rgba->w, rgba->h);
     int w = rgba->w, h = rgba->h;
     SDL_FreeSurface(rgba);
 
@@ -1198,7 +1185,7 @@ bool SpineViewer::swapTexture(const std::string& pageName, const std::string& pn
     auto& pages = atlas->getPages();
     for (size_t i = 0; i < pages.size(); i++) {
         if (std::string(pages[i]->name.buffer()) == pageName) {
-            pages[i]->setRendererObject((void*)(uintptr_t)newTex);
+            pages[i]->setRendererObject(reinterpret_cast<void *>(static_cast<uintptr_t>(newTex)));
             pages[i]->width = w;
             pages[i]->height = h;
             textureSwaps[pageName] = pngPath;
@@ -1225,15 +1212,12 @@ std::string SpineViewer::getModifiedSkeletonJson() const {
     if (boneOverrides.empty()) return originalJson;
 
     try {
-        // Parse, modify bone scales, re-serialize
-        // Using nlohmann json (already included via json.hpp)
         auto j = nlohmann::ordered_json::parse(originalJson);
         if (j.contains("bones") && j["bones"].is_array()) {
             for (auto& bone : j["bones"]) {
                 if (!bone.contains("name")) continue;
-                std::string name = bone["name"].get<std::string>();
-                auto it = boneOverrides.find(name);
-                if (it != boneOverrides.end()) {
+                auto name = bone["name"].get<std::string>();
+                if (auto it = boneOverrides.find(name); it != boneOverrides.end()) {
                     bone["x"] = it->second.x;
                     bone["y"] = it->second.y;
                     bone["rotation"] = it->second.rotation;

@@ -4,8 +4,6 @@
 #include <cstdio>
 #include <string>
 
-// Traversal and formatting helpers shared by the GUI and the headless CLI. Header-only so both targets pick them up without a CMake change, and free of any
-// SDL, OpenGL, or application state so they stay usable from a console build.
 namespace Core
 {
     /**
@@ -83,7 +81,7 @@ namespace Core
     inline std::string FormatSize(uint64_t bytes)
     {
         static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
-        double size = static_cast<double>(bytes);
+        auto size = static_cast<double>(bytes);
         int unit = 0;
         while (size >= 1024.0 && unit < 4)
         {

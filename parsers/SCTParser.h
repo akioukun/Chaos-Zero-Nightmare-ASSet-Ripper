@@ -1,10 +1,6 @@
 #pragma once
 #include <vector>
 #include <cstdint>
-#include <string>
-#include <map>
-#include <tuple>
-#include <astcenc.h>
 
 namespace SCTParser {
     struct RGBAImage {
@@ -13,6 +9,6 @@ namespace SCTParser {
         int height = 0;
     };
 
-    RGBAImage ConvertToRGBA(const std::vector<uint8_t>& data, bool verbose = false);
-    std::vector<uint8_t> ConvertToPNG(const std::vector<uint8_t>& data, bool verbose = false);
+    RGBAImage ConvertToRGBA(const std::vector<uint8_t> &data);
+    std::vector<uint8_t> ConvertToPNG(const std::vector<uint8_t> &data);
 }

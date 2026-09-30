@@ -42,42 +42,6 @@
 #include "gui/SpinePanel.h"
 #include "gui/Toolbar.h"
 
-void reset_app_state()
-{
-    g_state.browser.data_pack.reset();
-    g_state.tasks.scan_complete = false;
-    g_state.browser.selected_node = nullptr;
-    g_state.browser.selected_nodes.clear();
-    g_state.browser.expanded_folders.clear();
-    clear_preview();
-    g_state.browser.search_query = "";
-    memset(g_state.browser.search_buffer, 0, sizeof(g_state.browser.search_buffer));
-    memset(g_state.database.search_buffer, 0, sizeof(g_state.database.search_buffer));
-    if (g_state.spine.build_future.valid())
-        g_state.spine.build_future.wait();
-    g_state.spine.dictionary.Clear();
-    g_state.spine.show_window = false;
-    g_state.spine.selected_index = -1;
-    memset(g_state.spine.search_buffer, 0, sizeof(g_state.spine.search_buffer));
-    g_state.spine.search_query = "";
-    memset(g_state.spine.bone_search_buf, 0, sizeof(g_state.spine.bone_search_buf));
-    g_state.spine.active_gizmo = 0;
-    g_state.spine.export_pending = false;
-    g_state.spine.bone_just_reset = false;
-    g_state.spine.selected_bone = "";
-    if (g_state.spine.viewer)
-        g_state.spine.viewer->unload();
-    g_state.spine.viewer.reset();
-    g_state.spine.expanded_categories.clear();
-    g_state.common.dragging_splitter = false;
-    g_state.diff.show_tree = false;
-    g_state.diff.root.reset();
-    g_state.diff.visible_nodes.clear();
-    g_state.diff.expanded_folders.clear();
-    g_state.diff.selected_nodes.clear();
-    g_state.diff.selected_node = nullptr;
-}
-
 int main(int argc, char *argv[])
 {
     load_options_from_ini();
@@ -356,7 +320,7 @@ int main(int argc, char *argv[])
 
         if (nk_begin(ctx, "Main", nk_rect(0, 0, static_cast<float>(window_width), static_cast<float>(window_height)), NK_WINDOW_NO_SCROLLBAR))
         {
-            draw_toolbar(ctx, window_width, scroll_to_selected);
+            draw_toolbar(ctx);
 
             bool tree_scanned = (g_state.browser.data_pack != nullptr) && g_state.tasks.scan_complete.load();
             bool selection_exists = g_state.diff.show_tree ? (g_state.diff.selected_node != nullptr) : (g_state.browser.selected_node != nullptr);
@@ -386,7 +350,7 @@ int main(int argc, char *argv[])
                 nk_layout_row_begin(ctx, NK_STATIC, content_height, (showing_preview_panel) ? 3 : 1);
                 nk_layout_row_push(ctx, left_width);
 
-                draw_file_browser_panel(ctx, left_width, tree_scanned, scroll_to_selected);
+                draw_file_browser_panel(ctx, tree_scanned, scroll_to_selected);
 
                 if (showing_preview_panel)
                 {

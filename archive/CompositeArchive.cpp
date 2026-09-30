@@ -21,11 +21,11 @@ void CompositeArchive::Scan(std::atomic<float>& progress)
         return;
     }
 
-    float weight = 1.0f / archives.size();
+    const float weight = 1.0f / archives.size();
 
     for (size_t i = 0; i < archives.size(); ++i) {
-        std::atomic<float> sub_progress{0.0f};
-        std::atomic<bool> done{false};
+        std::atomic sub_progress{0.0f};
+        std::atomic done{false};
         std::thread monitor([&]() {
             while (!done.load(std::memory_order_relaxed)) {
                 progress = (static_cast<float>(i) + sub_progress.load(std::memory_order_relaxed)) * weight;
@@ -51,8 +51,8 @@ void CompositeArchive::Scan(std::atomic<float>& progress)
                     // We preserve the offset and size, but set the archive_id to our child's index
                     AddFileToTree(n.full_path, info.offset, info.size, static_cast<uint32_t>(i));
                 } else if (std::holds_alternative<Core::FolderInfo>(n.data)) {
-                    const auto& folder_info = std::get<Core::FolderInfo>(n.data);
-                    for (const auto& child : folder_info.children) {
+                    const auto&[folder_info] = std::get<Core::FolderInfo>(n.data);
+                    for (const auto& child : folder_info) {
                         merge_func(child);
                     }
                 }
@@ -71,15 +71,8 @@ void CompositeArchive::Scan(std::atomic<float>& progress)
 std::vector<uint8_t> CompositeArchive::GetFileData(const Core::FileNode& node)
 {
     if (std::holds_alternative<Core::FileInfo>(node.data)) {
-        const auto& info = std::get<Core::FileInfo>(node.data);
-        if (info.archive_id < archives.size()) {
-            // Find the node in the child archive
-            // But wait, the child archive's GetFileData takes a FileNode.
-            // We can just pass it directly if we give it our node.
-            // However, our node has the composite's archive_id.
-            // The child archive might not care about archive_id since it only has one ID anyway.
-            // Let's create a temporary node for the child.
-            Core::FileNode child_node = node;
+        if (const auto& info = std::get<Core::FileInfo>(node.data); info.archive_id < archives.size()) {
+            const Core::FileNode& child_node = node;
             return archives[info.archive_id]->GetFileData(child_node);
         }
     }

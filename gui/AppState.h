@@ -220,5 +220,4 @@ struct AppState
 
 extern AppState g_state;
 
-// Resets all application state (closes pack, clears selection, preview, spine viewer, diff tree).
 void reset_app_state();

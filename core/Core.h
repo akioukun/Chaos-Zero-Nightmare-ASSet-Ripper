@@ -14,10 +14,10 @@ namespace Core {
     inline std::string WStringToUtf8(const std::wstring& wstr) {
         if (wstr.empty()) return "";
 #ifdef _WIN32
-        int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), NULL, 0, NULL, NULL);
+        const int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
         if (size_needed <= 0) return "";
         std::string str(size_needed, 0);
-        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), &str[0], size_needed, NULL, NULL);
+        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), &str[0], size_needed, nullptr, nullptr);
         return str;
 #else
         return std::string(wstr.begin(), wstr.end());
@@ -27,10 +27,10 @@ namespace Core {
     inline std::wstring Utf8ToWString(const std::string& str) {
         if (str.empty()) return L"";
 #ifdef _WIN32
-        int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
+        const int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), nullptr, 0);
         if (size_needed <= 0) return L"";
         std::wstring wstr(size_needed, 0);
-        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size_needed);
+        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), &wstr[0], size_needed);
         return wstr;
 #else
         return std::wstring(str.begin(), str.end());
@@ -41,9 +41,9 @@ namespace Core {
         return WStringToUtf8(p.wstring());
     }
     
-    static constexpr uint32_t INITIAL = 0x24D1C;
-    static constexpr uint32_t MULT = 0x41C64E6D;
-    static constexpr size_t KEY_SIZE = 0x81;
+    constexpr uint32_t INITIAL  = 0x24D1C;
+    constexpr uint32_t MULT     = 0x41C64E6D;
+    constexpr size_t   KEY_SIZE = 0x81;
 
     
     struct FileNode;
@@ -65,9 +65,9 @@ namespace Core {
         std::variant<FileInfo, FolderInfo> data;
     };
 
-    inline void xor_buffer(uint8_t* buffer, size_t size, size_t file_offset) {
+    inline void XorBuffer(uint8_t* buffer, size_t size, size_t file_offset) {
         // Generate key buffer
-        std::array<uint8_t, KEY_SIZE> key;
+        std::array<uint8_t, KEY_SIZE> key{};
         uint32_t current = INITIAL;
         for (size_t i = 0; i < KEY_SIZE; ++i) {
             current = (current * MULT) & 0x7FFFFFFF;
@@ -102,4 +102,4 @@ namespace Core {
         const auto dot = name.find_last_of('.');
         return (dot != std::string::npos ? name.substr(0, dot) : name) + new_ext;
     }
-}
+}

@@ -65,8 +65,8 @@ bool has_matching_child(const Core::FileNode &node, const std::string &query)
 
     if (std::holds_alternative<Core::FolderInfo>(node.data))
     {
-        const auto &folder = std::get<Core::FolderInfo>(node.data);
-        for (const auto &child : folder.children)
+        const auto &[folder] = std::get<Core::FolderInfo>(node.data);
+        for (const auto &child : folder)
         {
             if (has_matching_child(child, query))
                 return true;
@@ -76,13 +76,13 @@ bool has_matching_child(const Core::FileNode &node, const std::string &query)
     return false;
 }
 
-struct nk_style_button make_tree_button_style(nk_context *ctx, bool is_selected, int depth, struct nk_color text_color)
+nk_style_button make_tree_button_style(const nk_context *ctx, const bool is_selected, const int depth, const nk_color text_color)
 {
-    struct nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
+    nk_color bg_color = (depth % 2 == 0) ? nk_rgb(35, 35, 38) : nk_rgb(40, 40, 43);
     if (is_selected)
         bg_color = nk_rgb(65, 65, 70);
 
-    struct nk_style_button style = ctx->style.button;
+    nk_style_button style = ctx->style.button;
     style.normal = nk_style_item_color(bg_color);
     style.hover = nk_style_item_color(is_selected ? nk_rgb(85, 85, 95) : nk_rgb(50, 50, 55));
     style.active = nk_style_item_color(nk_rgb(70, 70, 80));
@@ -95,9 +95,9 @@ struct nk_style_button make_tree_button_style(nk_context *ctx, bool is_selected,
     return style;
 }
 
-struct nk_style_button make_tree_expand_style(nk_context *ctx)
+nk_style_button make_tree_expand_style(nk_context *ctx)
 {
-    struct nk_style_button style = ctx->style.button;
+    nk_style_button style = ctx->style.button;
     style.normal = nk_style_item_color(nk_rgb(60, 60, 65));
     style.hover = nk_style_item_color(nk_rgb(80, 80, 85));
     style.text_normal = nk_rgb(200, 200, 200);
@@ -106,7 +106,7 @@ struct nk_style_button make_tree_expand_style(nk_context *ctx)
     return style;
 }
 
-struct nk_color get_diff_status_color(DiffStatus status, bool is_selected, bool is_folder)
+nk_color get_diff_status_color(DiffStatus status, bool is_selected, bool is_folder)
 {
     if (is_selected)
         return nk_rgb(255, 255, 255);
@@ -119,9 +119,9 @@ struct nk_color get_diff_status_color(DiffStatus status, bool is_selected, bool 
     }
 }
 
-bool draw_tree_row(nk_context *ctx, int depth, bool is_folder, bool is_expanded,
-                   bool is_selected, const std::string &label, const std::string &info,
-                   struct nk_color text_color, bool &out_toggle_expand,
+bool draw_tree_row(nk_context *ctx, const int depth, const bool is_folder, const bool is_expanded,
+                   const bool is_selected, const std::string &label, const std::string &info,
+                   const nk_color text_color, bool &out_toggle_expand,
                    bool *out_right_clicked, struct nk_vec2 *out_mouse_pos)
 {
     out_toggle_expand = false;
@@ -130,11 +130,9 @@ bool draw_tree_row(nk_context *ctx, int depth, bool is_folder, bool is_expanded,
 
     nk_layout_row_begin(ctx, NK_STATIC, 26, 4);
 
-    // Col 1: Indentation spacer
     nk_layout_row_push(ctx, depth * 16.0f + 10.0f);
     nk_spacing(ctx, 1);
 
-    // Col 2: Expand/collapse button or empty spacing
     nk_layout_row_push(ctx, 24.0f);
     if (is_folder)
     {
@@ -149,10 +147,9 @@ bool draw_tree_row(nk_context *ctx, int depth, bool is_folder, bool is_expanded,
         nk_spacing(ctx, 1);
     }
 
-    // Col 3: Label button
     nk_layout_row_push(ctx, 370.0f);
-    struct nk_style_button button_style = make_tree_button_style(ctx, is_selected, depth, text_color);
-    bool clicked = nk_button_label_styled(ctx, &button_style, label.c_str()) != 0;
+    const nk_style_button button_style = make_tree_button_style(ctx, is_selected, depth, text_color);
+    const bool clicked = nk_button_label_styled(ctx, &button_style, label.c_str()) != 0;
 
     // Optional right-click detection on the label button
     if (out_right_clicked && out_mouse_pos)

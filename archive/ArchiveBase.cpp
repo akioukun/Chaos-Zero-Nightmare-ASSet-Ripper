@@ -6,12 +6,31 @@
 #include "parsers/DBParser.h"
 #include "parsers/SCSPParser.h"
 #include "core/Logger.h"
+#include "core/FileTree.h"
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
 #include <iostream>
 #include <functional>
 #include <variant>
+
+namespace {
+    void sort_node(Core::FileNode &node)
+    {
+        if (!std::holds_alternative<Core::FolderInfo>(node.data))
+            return;
+        auto &[folder] = std::get<Core::FolderInfo>(node.data);
+        std::sort(folder.begin(), folder.end(),
+              [](const Core::FileNode &a, const Core::FileNode &b) {
+                  const bool a_folder = std::holds_alternative<Core::FolderInfo>(a.data);
+                  if (const bool b_folder = std::holds_alternative<Core::FolderInfo>(b.data); a_folder != b_folder)
+                      return a_folder > b_folder; // folders first
+                  return a.name < b.name;
+              });
+        for (auto &child : folder)
+            sort_node(child);
+    }
+}
 
 ArchiveBase::ArchiveBase()
 {
@@ -25,8 +44,7 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
     try
     {
         std::string clean_path = path;
-        size_t end = clean_path.find('\0');
-        if (end != std::string::npos) clean_path = clean_path.substr(0, end);
+        if (const size_t null_pos = clean_path.find('\0'); null_pos != std::string::npos) clean_path = clean_path.substr(0, null_pos);
         std::replace(clean_path.begin(), clean_path.end(), '\\', '/');
         while (!clean_path.empty() && clean_path.back() == '/') clean_path.pop_back();
         while (!clean_path.empty() && clean_path.front() == '/') clean_path.erase(clean_path.begin());
@@ -38,8 +56,7 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
         while (start < clean_path.size())
         {
             size_t slash = clean_path.find('/', start);
-            size_t end = (slash == std::string::npos) ? clean_path.size() : slash;
-            if (end > start)
+            if (size_t end = (slash == std::string::npos) ? clean_path.size() : slash; end > start)
             {
                 parts.push_back(clean_path.substr(start, end - start));
             }
@@ -52,7 +69,7 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
             return;
 
         Core::FileNode* current = &root_node;
-        std::string current_path = "";
+        std::string current_path;
 
         for (size_t i = 0; i < parts.size() - 1; ++i)
         {
@@ -62,18 +79,16 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
                 LogError("Cannot add file to tree: intermediate node is not a folder.");
                 return;
             }
-            auto& folder_info = std::get<Core::FolderInfo>(current->data);
-            
-            auto it = std::find_if(folder_info.children.begin(), folder_info.children.end(),
-                                   [&](const Core::FileNode& n) { return n.name == parts[i]; });
-            if (it == folder_info.children.end())
+            auto&[folder_info] = std::get<Core::FolderInfo>(current->data);
+
+            if (auto it = std::find_if(folder_info.begin(), folder_info.end(),[&](const Core::FileNode& n) { return n.name == parts[i]; }); it == folder_info.end())
             {
                 Core::FileNode new_folder;
                 new_folder.name = parts[i];
                 new_folder.full_path = current_path;
                 new_folder.data = Core::FolderInfo{};
-                folder_info.children.push_back(new_folder);
-                current = &folder_info.children.back();
+                folder_info.push_back(new_folder);
+                current = &folder_info.back();
             }
             else
             {
@@ -113,8 +128,7 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
         info.size = size;
         info.archive_id = archive_id;
 
-        size_t dot_pos = filename.find_last_of('.');
-        if (dot_pos != std::string::npos)
+        if (size_t dot_pos = filename.find_last_of('.'); dot_pos != std::string::npos)
         {
             info.format = filename.substr(dot_pos);
         }
@@ -137,48 +151,19 @@ void ArchiveBase::AddFileToTree(const std::string& path, uint64_t offset, uint64
 
 void ArchiveBase::SortTree()
 {
-    std::function<void(Core::FileNode&)> sort_node = [&](Core::FileNode& node) {
-        if (std::holds_alternative<Core::FolderInfo>(node.data)) {
-            auto& folder = std::get<Core::FolderInfo>(node.data);
-            std::sort(folder.children.begin(), folder.children.end(), [](const Core::FileNode& a, const Core::FileNode& b) {
-                bool a_is_folder = std::holds_alternative<Core::FolderInfo>(a.data);
-                bool b_is_folder = std::holds_alternative<Core::FolderInfo>(b.data);
-                if (a_is_folder != b_is_folder) {
-                    return a_is_folder > b_is_folder; // True (1) > False (0), so folders first
-                }
-                return a.name < b.name;
-            });
-            for (auto& child : folder.children) {
-                sort_node(child);
-            }
-        }
-    };
     sort_node(root_node);
 }
 
-void ArchiveBase::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json)
+void ArchiveBase::ExtractAll(const std::wstring& output_path, std::atomic<float>& progress, const bool convert_sct_to_png, const bool convert_db_to_json)
 {
     LogInfo("ExtractAll started");
     Extract(root_node, output_path, progress, convert_sct_to_png, convert_db_to_json);
     LogInfo("ExtractAll finished");
 }
 
-void ArchiveBase::Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress, bool convert_sct_to_png, bool convert_db_to_json)
+void ArchiveBase::Extract(const Core::FileNode& node, const std::wstring& output_path, std::atomic<float>& progress, const bool convert_sct_to_png, const bool convert_db_to_json)
 {
-    uint64_t total_size_to_extract = 0;
-    std::function<void(const Core::FileNode&)> F = [&](const Core::FileNode& n)
-    {
-        if (std::holds_alternative<Core::FileInfo>(n.data))
-        {
-            total_size_to_extract += std::get<Core::FileInfo>(n.data).size;
-        }
-        else if (std::holds_alternative<Core::FolderInfo>(n.data))
-        {
-            for (const auto& child : std::get<Core::FolderInfo>(n.data).children)
-                F(child);
-        }
-    };
-    F(node);
+    const uint64_t total_size_to_extract = Core::NodeTotalBytes(node);
 
     if (total_size_to_extract == 0)
     {
@@ -202,12 +187,11 @@ void ArchiveBase::ExtractNode(const Core::FileNode& node, const std::wstring& cu
             std::filesystem::path final_path = std::filesystem::path(current_path) / node.name;
             LogInfo(std::string("Extracting file: ") + node.name + " size=" + std::to_string(info.size));
 
-            std::string ext_lower = info.format;
-            std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
-            bool is_sct = (ext_lower == ".sct" || ext_lower == ".sct2");
-            bool is_db = (ext_lower == ".db");
-            bool is_scsp = (ext_lower == ".scsp");
-            bool is_atlas = (ext_lower == ".atlas");
+            const std::string ext_lower = Core::ToLower(info.format);
+            const bool is_sct   = (ext_lower == ".sct" || ext_lower == ".sct2");
+            const bool is_db    = (ext_lower == ".db");
+            const bool is_scsp  = (ext_lower == ".scsp");
+            const bool is_atlas = (ext_lower == ".atlas");
 
             if (is_sct && convert_sct_to_png)
                 final_path.replace_extension(".png");
@@ -227,8 +211,7 @@ void ArchiveBase::ExtractNode(const Core::FileNode& node, const std::wstring& cu
                     try
                     {
                         LogInfo(std::string("Converting SCT to PNG: ") + node.name);
-                        std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(buffer, false);
-                        if (!png_data.empty())
+                        if (std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(buffer); !png_data.empty())
                         {
                             buffer = std::move(png_data);
                         }
@@ -332,15 +315,14 @@ void ArchiveBase::ExtractNode(const Core::FileNode& node, const std::wstring& cu
 
 std::unique_ptr<IArchive> IArchive::Create(const std::wstring& wpath)
 {
-    std::filesystem::path p(wpath);
+    const std::filesystem::path p(wpath);
     if (p.filename() == L"manifest.ssra" || p.extension() == L".ssra")
     {
         return std::make_unique<SSRArchive>(wpath);
     }
-    std::filesystem::path dir = std::filesystem::is_directory(p) ? p : p.parent_path();
-    std::filesystem::path gameres_path = dir / L"gameres";
+    const std::filesystem::path dir = std::filesystem::is_directory(p) ? p : p.parent_path();
 
-    if (std::filesystem::exists(gameres_path) && std::filesystem::is_directory(gameres_path))
+    if (const std::filesystem::path gameres_path = dir / L"gameres"; std::filesystem::exists(gameres_path) && std::filesystem::is_directory(gameres_path))
     {
         auto composite = std::make_unique<CompositeArchive>(wpath);
         composite->AddArchive(std::make_unique<DataPack>(wpath));

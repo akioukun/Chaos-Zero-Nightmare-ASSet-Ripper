@@ -7,6 +7,29 @@
 #include "core/RipperOptions.h"
 #include "core/DialogPaths.h"
 
+namespace {
+    nk_style_button make_toggle_style(const nk_context *ctx, const bool is_on)
+    {
+        nk_style_button toggle_style = ctx->style.button;
+        if (is_on)
+        {
+            toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
+            toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
+            toggle_style.active = nk_style_item_color(nk_rgb(50, 108, 66));
+        }
+        else
+        {
+            toggle_style.normal = nk_style_item_color(nk_rgb(100, 64, 64));
+            toggle_style.hover = nk_style_item_color(nk_rgb(120, 74, 74));
+            toggle_style.active = nk_style_item_color(nk_rgb(88, 56, 56));
+        }
+        toggle_style.text_normal = nk_rgb(240, 240, 240);
+        toggle_style.text_hover = nk_rgb(255, 255, 255);
+        toggle_style.text_active = nk_rgb(255, 255, 255);
+        return toggle_style;
+    }
+}
+
 void save_options_to_ini()
 {
     RipperOptions options = LoadRipperOptions();
@@ -22,27 +45,6 @@ void load_options_from_ini()
     g_state.common.export_sct_as_png = options.exportSctAsPng ? nk_true : nk_false;
     g_state.common.export_db_as_json = options.exportDbAsJson ? nk_true : nk_false;
     g_state.common.enable_open_folder = options.enableOpenFolder ? nk_true : nk_false;
-}
-
-static nk_style_button make_toggle_style(const nk_context *ctx, const bool is_on)
-{
-    nk_style_button toggle_style = ctx->style.button;
-    if (is_on)
-    {
-        toggle_style.normal = nk_style_item_color(nk_rgb(56, 120, 74));
-        toggle_style.hover = nk_style_item_color(nk_rgb(66, 138, 86));
-        toggle_style.active = nk_style_item_color(nk_rgb(50, 108, 66));
-    }
-    else
-    {
-        toggle_style.normal = nk_style_item_color(nk_rgb(100, 64, 64));
-        toggle_style.hover = nk_style_item_color(nk_rgb(120, 74, 74));
-        toggle_style.active = nk_style_item_color(nk_rgb(88, 56, 56));
-    }
-    toggle_style.text_normal = nk_rgb(240, 240, 240);
-    toggle_style.text_hover = nk_rgb(255, 255, 255);
-    toggle_style.text_active = nk_rgb(255, 255, 255);
-    return toggle_style;
 }
 
 void draw_options_popup(nk_context *ctx, const int window_width, const int window_height)
@@ -140,7 +142,7 @@ void draw_options_popup(nk_context *ctx, const int window_width, const int windo
     nk_end(ctx);
 }
 
-void draw_credits_popup(nk_context *ctx, int window_width, int window_height)
+void draw_credits_popup(nk_context *ctx, const int window_width, const int window_height)
 {
     if (!g_state.credits.show_window)
         return;
@@ -175,7 +177,7 @@ void draw_credits_popup(nk_context *ctx, int window_width, int window_height)
     nk_end(ctx);
 }
 
-void draw_feedback_popups(nk_context *ctx, int window_width, int window_height)
+void draw_feedback_popups(nk_context *ctx, const int window_width, const int window_height)
 {
     if (g_state.common.show_success_popup)
     {
@@ -294,7 +296,7 @@ void draw_context_menu(nk_context *ctx)
                     const std::string save_path = DialogPaths::SaveFile("Extract File", g_state.context_menu.node->name, {"All Files", "*.*"});
                     if (!save_path.empty())
                     {
-                        std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(*g_state.context_menu.node);
+                        const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(*g_state.context_menu.node);
                         std::ofstream out(save_path, std::ios::binary);
                         out.write(reinterpret_cast<const char *>(file_data.data()), file_data.size());
                         out.close();

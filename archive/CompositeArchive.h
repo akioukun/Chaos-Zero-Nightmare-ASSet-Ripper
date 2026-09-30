@@ -5,7 +5,7 @@
 
 class CompositeArchive : public ArchiveBase {
 public:
-    CompositeArchive(const std::wstring& base_pack_path);
+    explicit CompositeArchive(const std::wstring& base_pack_path);
     ~CompositeArchive() override = default;
 
     void AddArchive(std::unique_ptr<IArchive> archive);

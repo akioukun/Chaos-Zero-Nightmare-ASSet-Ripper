@@ -1,5 +1,3 @@
-// SpineRenderer.h MUST be first — spine/spine.h pollutes the global namespace,
-// so it must be included before any other headers that define their own types.
 #include "parsers/SpineRenderer.h"
 
 #include <algorithm>
@@ -26,246 +24,248 @@
 #include "nlohmann/json.hpp"
 #include "nuklear.h"
 
-bool spine_category_has_search_match(const SpineCategory &cat, const std::vector<SpineEntry> &entries, const std::string &query_lower)
-{
-    if (query_lower.empty())
-        return true;
-    for (size_t idx : cat.entry_indices)
+namespace {
+    bool spine_category_has_search_match(const SpineCategory &cat, const std::vector<SpineEntry> &entries, const std::string &query_lower)
     {
-        std::string dn = entries[idx].display_name;
-        std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
-        if (dn.find(query_lower) != std::string::npos)
+        if (query_lower.empty())
             return true;
-        std::string cp = entries[idx].category;
-        std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
-        if (cp.find(query_lower) != std::string::npos)
-            return true;
-    }
-    for (const auto &[name, sub] : cat.subcategories)
-    {
-        if (spine_category_has_search_match(sub, entries, query_lower))
-            return true;
-    }
-    return false;
-}
-
-void draw_spine_category(nk_context *ctx, const SpineCategory &cat, const std::vector<SpineEntry> &entries, int depth)
-{
-    std::string query_lower = g_state.spine.search_query;
-    std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
-
-    for (const auto &[subname, sub] : cat.subcategories)
-    {
-        if (!spine_category_has_search_match(sub, entries, query_lower))
-            continue;
-
-        bool expanded = g_state.spine.expanded_categories.count(sub.full_path) > 0;
-        if (!query_lower.empty())
-            expanded = true;
-
-        std::function<int(const SpineCategory &)> count_entries = [&](const SpineCategory &c) -> int
+        for (const size_t idx : cat.entry_indices)
         {
-            int n = (int)c.entry_indices.size();
-            for (const auto &[k, sc] : c.subcategories)
-                n += count_entries(sc);
-            return n;
-        };
-        int total = count_entries(sub);
-
-        nk_layout_row_begin(ctx, NK_STATIC, 24, 2);
-        float indent = depth * 16.0f;
-        if (indent > 0)
-        {
-            nk_layout_row_push(ctx, indent);
-            nk_spacing(ctx, 1);
+            std::string dn = entries[idx].display_name;
+            std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
+            if (dn.find(query_lower) != std::string::npos)
+                return true;
+            std::string cp = entries[idx].category;
+            std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
+            if (cp.find(query_lower) != std::string::npos)
+                return true;
         }
-
-        nk_layout_row_push(ctx, 300.0f - indent);
-        struct nk_style_button cbtn = ctx->style.button;
-        cbtn.text_alignment = NK_TEXT_LEFT;
-        cbtn.padding = nk_vec2(6, 3);
-        cbtn.rounding = 2.0f;
-        int shade = 50 + (depth % 3) * 5;
-        cbtn.normal = nk_style_item_color(nk_rgb(shade, shade + 5, shade + 15));
-        cbtn.hover = nk_style_item_color(nk_rgb(shade + 10, shade + 15, shade + 25));
-        cbtn.text_normal = nk_rgb(180, 200, 230);
-        cbtn.text_hover = nk_rgb(220, 230, 255);
-
-        std::string folder_label = (expanded ? "- " : "+ ") + sub.name + " (" + std::to_string(total) + ")";
-        if (nk_button_label_styled(ctx, &cbtn, folder_label.c_str()))
+        for (const auto &[name, sub] : cat.subcategories)
         {
-            if (expanded)
-                g_state.spine.expanded_categories.erase(sub.full_path);
-            else
-                g_state.spine.expanded_categories.insert(sub.full_path);
+            if (spine_category_has_search_match(sub, entries, query_lower))
+                return true;
         }
-        nk_layout_row_end(ctx);
+        return false;
+    }
 
-        if (!expanded)
-            continue;
+    void draw_spine_category(nk_context *ctx, const SpineCategory &cat, const std::vector<SpineEntry> &entries, const int depth)
+    {
+        std::string query_lower = g_state.spine.search_query;
+        std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
 
-        for (size_t idx : sub.entry_indices)
+        for (const auto &[subname, sub] : cat.subcategories)
         {
-            const auto &ent = entries[idx];
+            if (!spine_category_has_search_match(sub, entries, query_lower))
+                continue;
 
+            bool expanded = g_state.spine.expanded_categories.count(sub.full_path) > 0;
             if (!query_lower.empty())
-            {
-                std::string dn = ent.display_name;
-                std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
-                std::string cp = ent.category;
-                std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
-                if (dn.find(query_lower) == std::string::npos &&
-                    cp.find(query_lower) == std::string::npos)
-                    continue;
-            }
+                expanded = true;
 
-            g_state.spine.visible_indices.push_back((int)idx);
+            std::function<int(const SpineCategory &)> count_entries = [&](const SpineCategory &c) -> int
+            {
+                int n = static_cast<int>(c.entry_indices.size());
+                for (const auto &[k, sc] : c.subcategories)
+                    n += count_entries(sc);
+                return n;
+            };
+            int total = count_entries(sub);
 
             nk_layout_row_begin(ctx, NK_STATIC, 24, 2);
-            float entry_indent = (depth + 1) * 16.0f;
-            nk_layout_row_push(ctx, entry_indent);
-            nk_spacing(ctx, 1);
-
-            nk_layout_row_push(ctx, 300.0f - entry_indent);
-            bool isSel = ((int)idx == g_state.spine.selected_index);
-            struct nk_style_button ebtn = ctx->style.button;
-            ebtn.text_alignment = NK_TEXT_LEFT;
-            ebtn.padding = nk_vec2(6, 3);
-            ebtn.rounding = 2.0f;
-            if (isSel)
+            const float indent = depth * 16.0f;
+            if (indent > 0)
             {
-                ebtn.normal = nk_style_item_color(nk_rgb(55, 80, 120));
-                ebtn.hover = nk_style_item_color(nk_rgb(65, 90, 130));
-                ebtn.text_normal = nk_rgb(255, 255, 255);
+                nk_layout_row_push(ctx, indent);
+                nk_spacing(ctx, 1);
             }
-            else
-            {
-                ebtn.normal = nk_style_item_color(nk_rgb(38, 38, 42));
-                ebtn.hover = nk_style_item_color(nk_rgb(50, 50, 55));
-                ebtn.text_normal = nk_rgb(190, 190, 190);
-            }
-            ebtn.text_hover = nk_rgb(255, 255, 255);
 
-            if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str()))
+            nk_layout_row_push(ctx, 300.0f - indent);
+            nk_style_button cbtn = ctx->style.button;
+            cbtn.text_alignment = NK_TEXT_LEFT;
+            cbtn.padding = nk_vec2(6, 3);
+            cbtn.rounding = 2.0f;
+            const int shade = 50 + (depth % 3) * 5;
+            cbtn.normal = nk_style_item_color(nk_rgb(shade, shade + 5, shade + 15));
+            cbtn.hover = nk_style_item_color(nk_rgb(shade + 10, shade + 15, shade + 25));
+            cbtn.text_normal = nk_rgb(180, 200, 230);
+            cbtn.text_hover = nk_rgb(220, 230, 255);
+
+            std::string folder_label = (expanded ? "- " : "+ ") + sub.name + " (" + std::to_string(total) + ")";
+            if (nk_button_label_styled(ctx, &cbtn, folder_label.c_str()))
             {
-                if (g_state.spine.selected_index != (int)idx)
-                {
-                    g_state.spine.selected_index = (int)idx;
-                    g_state.spine.selected_animation = 0;
-                    g_state.spine.selected_skin = 0;
-                    g_state.spine.last_tick = 0;
-                    g_state.spine.edit_mode = false;
-                    if (!g_state.spine.viewer)
-                        g_state.spine.viewer = std::make_unique<SpineViewer>();
-                    g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, ent);
-                    g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
-                    g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
-                }
+                if (expanded)
+                    g_state.spine.expanded_categories.erase(sub.full_path);
+                else
+                    g_state.spine.expanded_categories.insert(sub.full_path);
             }
             nk_layout_row_end(ctx);
+
+            if (!expanded)
+                continue;
+
+            for (size_t idx : sub.entry_indices)
+            {
+                const auto &ent = entries[idx];
+
+                if (!query_lower.empty())
+                {
+                    std::string dn = ent.display_name;
+                    std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
+                    std::string cp = ent.category;
+                    std::transform(cp.begin(), cp.end(), cp.begin(), ::tolower);
+                    if (dn.find(query_lower) == std::string::npos &&
+                        cp.find(query_lower) == std::string::npos)
+                        continue;
+                }
+
+                g_state.spine.visible_indices.push_back(static_cast<int>(idx));
+
+                nk_layout_row_begin(ctx, NK_STATIC, 24, 2);
+                float entry_indent = (depth + 1) * 16.0f;
+                nk_layout_row_push(ctx, entry_indent);
+                nk_spacing(ctx, 1);
+
+                nk_layout_row_push(ctx, 300.0f - entry_indent);
+                const bool isSel = (static_cast<int>(idx) == g_state.spine.selected_index);
+                struct nk_style_button ebtn = ctx->style.button;
+                ebtn.text_alignment = NK_TEXT_LEFT;
+                ebtn.padding = nk_vec2(6, 3);
+                ebtn.rounding = 2.0f;
+                if (isSel)
+                {
+                    ebtn.normal = nk_style_item_color(nk_rgb(55, 80, 120));
+                    ebtn.hover = nk_style_item_color(nk_rgb(65, 90, 130));
+                    ebtn.text_normal = nk_rgb(255, 255, 255);
+                }
+                else
+                {
+                    ebtn.normal = nk_style_item_color(nk_rgb(38, 38, 42));
+                    ebtn.hover = nk_style_item_color(nk_rgb(50, 50, 55));
+                    ebtn.text_normal = nk_rgb(190, 190, 190);
+                }
+                ebtn.text_hover = nk_rgb(255, 255, 255);
+
+                if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str()))
+                {
+                    if (g_state.spine.selected_index != static_cast<int>(idx))
+                    {
+                        g_state.spine.selected_index = static_cast<int>(idx);
+                        g_state.spine.selected_animation = 0;
+                        g_state.spine.selected_skin = 0;
+                        g_state.spine.last_tick = 0;
+                        g_state.spine.edit_mode = false;
+                        if (!g_state.spine.viewer)
+                            g_state.spine.viewer = std::make_unique<SpineViewer>();
+                        g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, ent);
+                        g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
+                        g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
+                    }
+                }
+                nk_layout_row_end(ctx);
+            }
+
+            draw_spine_category(ctx, sub, entries, depth + 1);
         }
 
-        draw_spine_category(ctx, sub, entries, depth + 1);
-    }
-
-    if (depth == 0)
-    {
-        for (size_t idx : cat.entry_indices)
+        if (depth == 0)
         {
-            const auto &ent = entries[idx];
-
-            if (!query_lower.empty())
+            for (const size_t idx : cat.entry_indices)
             {
-                std::string dn = ent.display_name;
-                std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
-                if (dn.find(query_lower) == std::string::npos)
-                    continue;
-            }
+                const auto &ent = entries[idx];
 
-            g_state.spine.visible_indices.push_back((int)idx);
-
-            nk_layout_row_dynamic(ctx, 24, 1);
-            bool isSel = ((int)idx == g_state.spine.selected_index);
-            struct nk_style_button ebtn = ctx->style.button;
-            ebtn.text_alignment = NK_TEXT_LEFT;
-            ebtn.padding = nk_vec2(16, 3);
-            ebtn.rounding = 2.0f;
-            if (isSel)
-            {
-                ebtn.normal = nk_style_item_color(nk_rgb(55, 80, 120));
-                ebtn.hover = nk_style_item_color(nk_rgb(65, 90, 130));
-                ebtn.text_normal = nk_rgb(255, 255, 255);
-            }
-            else
-            {
-                ebtn.normal = nk_style_item_color(nk_rgb(38, 38, 42));
-                ebtn.hover = nk_style_item_color(nk_rgb(50, 50, 55));
-                ebtn.text_normal = nk_rgb(190, 190, 190);
-            }
-            ebtn.text_hover = nk_rgb(255, 255, 255);
-
-            if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str()))
-            {
-                if (g_state.spine.selected_index != (int)idx)
+                if (!query_lower.empty())
                 {
-                    g_state.spine.selected_index = (int)idx;
-                    g_state.spine.selected_animation = 0;
-                    g_state.spine.selected_skin = 0;
-                    g_state.spine.last_tick = 0;
-                    g_state.spine.edit_mode = false;
-                    if (!g_state.spine.viewer)
-                        g_state.spine.viewer = std::make_unique<SpineViewer>();
-                    g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, ent);
-                    g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
-                    g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
+                    std::string dn = ent.display_name;
+                    std::transform(dn.begin(), dn.end(), dn.begin(), ::tolower);
+                    if (dn.find(query_lower) == std::string::npos)
+                        continue;
+                }
+
+                g_state.spine.visible_indices.push_back(static_cast<int>(idx));
+
+                nk_layout_row_dynamic(ctx, 24, 1);
+                const bool isSel = (static_cast<int>(idx) == g_state.spine.selected_index);
+                nk_style_button ebtn = ctx->style.button;
+                ebtn.text_alignment = NK_TEXT_LEFT;
+                ebtn.padding = nk_vec2(16, 3);
+                ebtn.rounding = 2.0f;
+                if (isSel)
+                {
+                    ebtn.normal = nk_style_item_color(nk_rgb(55, 80, 120));
+                    ebtn.hover = nk_style_item_color(nk_rgb(65, 90, 130));
+                    ebtn.text_normal = nk_rgb(255, 255, 255);
+                }
+                else
+                {
+                    ebtn.normal = nk_style_item_color(nk_rgb(38, 38, 42));
+                    ebtn.hover = nk_style_item_color(nk_rgb(50, 50, 55));
+                    ebtn.text_normal = nk_rgb(190, 190, 190);
+                }
+                ebtn.text_hover = nk_rgb(255, 255, 255);
+
+                if (nk_button_label_styled(ctx, &ebtn, ent.display_name.c_str()))
+                {
+                    if (g_state.spine.selected_index != static_cast<int>(idx))
+                    {
+                        g_state.spine.selected_index = static_cast<int>(idx);
+                        g_state.spine.selected_animation = 0;
+                        g_state.spine.selected_skin = 0;
+                        g_state.spine.last_tick = 0;
+                        g_state.spine.edit_mode = false;
+                        if (!g_state.spine.viewer)
+                            g_state.spine.viewer = std::make_unique<SpineViewer>();
+                        g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, ent);
+                        g_state.spine.viewer->setFlipX(g_state.spine.flip_x);
+                        g_state.spine.viewer->setFlipY(g_state.spine.flip_y);
+                    }
                 }
             }
         }
     }
-}
 
-int export_spine_atlas_and_images(const SpineEntry &entry, const std::string &dest)
-{
-    int exported = 0;
-    if (entry.atlas_node)
+    int export_spine_atlas_and_images(const SpineEntry &entry, const std::string &dest)
     {
-        std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*entry.atlas_node);
-        std::string atlas_str(data.begin(), data.end());
-        size_t p = 0;
-        while ((p = atlas_str.find(".sct", p)) != std::string::npos)
+        int exported = 0;
+        if (entry.atlas_node)
         {
-            atlas_str.replace(p, 4, ".png");
-            p += 4;
-        }
-        std::ofstream out(dest + "/" + entry.atlas_node->name, std::ios::binary);
-        out << atlas_str;
-        exported++;
-    }
-
-    g_state.spine.dictionary.EnsureDetailsLoaded(*g_state.browser.data_pack, entry);
-    for (const auto *img : entry.image_nodes)
-    {
-        const auto &fi = std::get<Core::FileInfo>(img->data);
-        std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*img);
-        if (is_sct_format(fi.format))
-        {
-            std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(data, false);
-            if (!png_data.empty())
+            std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*entry.atlas_node);
+            std::string atlas_str(data.begin(), data.end());
+            size_t p = 0;
+            while ((p = atlas_str.find(".sct", p)) != std::string::npos)
             {
-                std::string out_name = Core::ReplaceExtension(img->name, ".png");
-                std::ofstream out(dest + "/" + out_name, std::ios::binary);
-                out.write((const char *)png_data.data(), png_data.size());
+                atlas_str.replace(p, 4, ".png");
+                p += 4;
+            }
+            std::ofstream out(dest + "/" + entry.atlas_node->name, std::ios::binary);
+            out << atlas_str;
+            exported++;
+        }
+
+        g_state.spine.dictionary.EnsureDetailsLoaded(*g_state.browser.data_pack, entry);
+        for (const auto *img : entry.image_nodes)
+        {
+            const auto &fi = std::get<Core::FileInfo>(img->data);
+            std::vector<uint8_t> data = g_state.browser.data_pack->GetFileData(*img);
+            if (is_sct_format(fi.format))
+            {
+                std::vector<uint8_t> png_data = SCTParser::ConvertToPNG(data);
+                if (!png_data.empty())
+                {
+                    std::string out_name = Core::ReplaceExtension(img->name, ".png");
+                    std::ofstream out(dest + "/" + out_name, std::ios::binary);
+                    out.write(reinterpret_cast<const char *>(png_data.data()), png_data.size());
+                    exported++;
+                }
+            }
+            else
+            {
+                std::ofstream out(dest + "/" + img->name, std::ios::binary);
+                out.write(reinterpret_cast<const char *>(data.data()), data.size());
                 exported++;
             }
         }
-        else
-        {
-            std::ofstream out(dest + "/" + img->name, std::ios::binary);
-            out.write((const char *)data.data(), data.size());
-            exported++;
-        }
+        return exported;
     }
-    return exported;
 }
 
 void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
@@ -278,7 +278,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
             Uint64 now = SDL_GetPerformanceCounter();
             if (g_state.spine.last_tick > 0)
             {
-                dt = (float)(now - g_state.spine.last_tick) / (float)SDL_GetPerformanceFrequency();
+                dt = static_cast<float>(now - g_state.spine.last_tick) / static_cast<float>(SDL_GetPerformanceFrequency());
                 dt *= g_state.spine.speed;
             }
             g_state.spine.last_tick = now;
@@ -311,7 +311,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
         nk_label_colored(ctx, sstats.c_str(), NK_TEXT_LEFT, nk_rgb(150, 200, 255));
         nk_layout_row_end(ctx);
 
-        float sw = (float)window_width;
+        auto sw = static_cast<float>(window_width);
         float sh = content_height - 30.0f;
         float iListW = sw * 0.22f;
         float iEditorW = g_state.spine.edit_mode ? sw * 0.30f : 0;
@@ -341,12 +341,12 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                 if (!anim_names.empty())
                 {
                     g_state.spine.selected_animation = g_state.spine.viewer->getCurrentAnimIndex();
-                    if (g_state.spine.selected_animation >= (int)anim_names.size())
+                    if (g_state.spine.selected_animation >= static_cast<int>(anim_names.size()))
                         g_state.spine.selected_animation = 0;
                     if (nk_combo_begin_label(ctx, anim_names[g_state.spine.selected_animation].c_str(), nk_vec2(200, 300)))
                     {
                         nk_layout_row_dynamic(ctx, 22, 1);
-                        for (int a = 0; a < (int)anim_names.size(); a++)
+                        for (int a = 0; a < static_cast<int>(anim_names.size()); a++)
                         {
                             if (nk_combo_item_label(ctx, anim_names[a].c_str(), NK_TEXT_LEFT))
                             {
@@ -364,15 +364,14 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                 nk_layout_row_push(ctx, 45);
                 nk_label(ctx, "Skin:", NK_TEXT_LEFT);
                 nk_layout_row_push(ctx, 120);
-                auto skin_names = g_state.spine.viewer->getSkinNames();
-                if (!skin_names.empty())
+                if (auto skin_names = g_state.spine.viewer->getSkinNames(); !skin_names.empty())
                 {
-                    if (g_state.spine.selected_skin >= (int)skin_names.size())
+                    if (g_state.spine.selected_skin >= static_cast<int>(skin_names.size()))
                         g_state.spine.selected_skin = 0;
                     if (nk_combo_begin_label(ctx, skin_names[g_state.spine.selected_skin].c_str(), nk_vec2(160, 300)))
                     {
                         nk_layout_row_dynamic(ctx, 22, 1);
-                        for (int s = 0; s < (int)skin_names.size(); s++)
+                        for (int s = 0; s < static_cast<int>(skin_names.size()); s++)
                         {
                             if (nk_combo_item_label(ctx, skin_names[s].c_str(), NK_TEXT_LEFT))
                             {
@@ -422,7 +421,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                 nk_layout_row_push(ctx, 60);
                 {
-                    struct nk_style_button flip_style = ctx->style.button;
+                    nk_style_button flip_style = ctx->style.button;
                     flip_style.rounding = 3.0f;
                     if (g_state.spine.flip_x)
                     {
@@ -445,7 +444,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                 nk_layout_row_push(ctx, 60);
                 {
-                    struct nk_style_button flip_style = ctx->style.button;
+                    nk_style_button flip_style = ctx->style.button;
                     flip_style.rounding = 3.0f;
                     if (g_state.spine.flip_y)
                     {
@@ -468,7 +467,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                 nk_layout_row_push(ctx, 45);
                 {
-                    struct nk_style_button edit_style = ctx->style.button;
+                    nk_style_button edit_style = ctx->style.button;
                     edit_style.rounding = 3.0f;
                     if (g_state.spine.edit_mode)
                     {
@@ -496,7 +495,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                 }
 
                 nk_layout_row_push(ctx, 100);
-                if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)spine_entries_inline.size())
+                if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < static_cast<int>(spine_entries_inline.size()))
                 {
                     if (nk_button_label(ctx, "Export All"))
                     {
@@ -542,7 +541,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                 nk_layout_row_push(ctx, 80);
                 {
-                    struct nk_style_button ab = ctx->style.button;
+                    nk_style_button ab = ctx->style.button;
                     ab.rounding = 3.0f;
                     ab.normal = nk_style_item_color(g_state.spine.autoplay ? nk_rgb(56, 120, 74) : nk_rgb(60, 60, 65));
                     ab.hover = nk_style_item_color(g_state.spine.autoplay ? nk_rgb(66, 138, 86) : nk_rgb(75, 75, 80));
@@ -566,7 +565,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                 nk_layout_row_push(ctx, 80);
                 {
-                    struct nk_style_button pb = ctx->style.button;
+                    nk_style_button pb = ctx->style.button;
                     pb.rounding = 3.0f;
                     pb.normal = nk_style_item_color(g_state.spine.pma_blend ? nk_rgb(70, 90, 120) : nk_rgb(60, 60, 65));
                     pb.hover = nk_style_item_color(nk_rgb(80, 100, 130));
@@ -576,7 +575,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                         g_state.spine.pma_blend = !g_state.spine.pma_blend;
                         g_state.spine.viewer->setUsePMA(g_state.spine.pma_blend);
                         g_state.spine.viewer->setPremultiplyTextures(false);
-                        if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)spine_entries_inline.size())
+                        if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < static_cast<int>(spine_entries_inline.size()))
                         {
                             g_state.spine.viewer->loadSkeleton(g_state.spine.dictionary, *g_state.browser.data_pack, spine_entries_inline[g_state.spine.selected_index]);
                         }
@@ -588,16 +587,15 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                 nk_layout_row_push(ctx, 80);
                 {
-                    const char *bg_labels[] = {"BG: None", "BG: Dark", "BG: Gray", "BG: White"};
-                    const float bg_colors[][3] = {
-                        {0, 0, 0}, {0.12f, 0.12f, 0.14f}, {0.35f, 0.35f, 0.38f}, {1.0f, 1.0f, 1.0f}};
-                    struct nk_style_button bb = ctx->style.button;
+                    nk_style_button bb = ctx->style.button;
                     bb.rounding = 3.0f;
                     bb.normal = nk_style_item_color(nk_rgb(60, 60, 65));
                     bb.hover = nk_style_item_color(nk_rgb(75, 75, 80));
                     bb.text_normal = nk_rgb(200, 200, 200);
-                    if (nk_button_label_styled(ctx, &bb, bg_labels[g_state.spine.bg_preset]))
+                    if (const char *bg_labels[] = {"BG: None", "BG: Dark", "BG: Gray", "BG: White"}; nk_button_label_styled(ctx, &bb, bg_labels[g_state.spine.bg_preset]))
                     {
+                        constexpr float bg_colors[][3] = {
+                            {0, 0, 0}, {0.12f, 0.12f, 0.14f}, {0.35f, 0.35f, 0.38f}, {1.0f, 1.0f, 1.0f}};
                         g_state.spine.bg_preset = (g_state.spine.bg_preset + 1) % 4;
                         g_state.spine.viewer->setBgColor(
                             bg_colors[g_state.spine.bg_preset][0],
@@ -613,12 +611,11 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                     vpH = 100;
                 nk_layout_row_dynamic(ctx, vpH, 1);
                 struct nk_rect vb = nk_widget_bounds(ctx);
-                int vw = (int)vb.w, vh = (int)vb.h;
+                int vw = static_cast<int>(vb.w), vh = static_cast<int>(vb.h);
 
                 {
                     nk_input *inp = &ctx->input;
-                    bool popup_active = (ctx->current && ctx->current->popup.win);
-                    if (!popup_active && nk_input_is_mouse_hovering_rect(inp, vb))
+                    if (bool popup_active = (ctx->current && ctx->current->popup.win); !popup_active && nk_input_is_mouse_hovering_rect(inp, vb))
                     {
                         float scr = inp->mouse.scroll_delta.y;
                         float mdx = inp->mouse.delta.x, mdy = inp->mouse.delta.y;
@@ -635,7 +632,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                         {
                             if (mdx != 0 || mdy != 0)
                             {
-                                float s = g_state.spine.viewer->getZoom() > 0 ? (float)vw / g_state.spine.viewer->getZoom() / vw : 1;
+                                float s = g_state.spine.viewer->getZoom() > 0 ? static_cast<float>(vw) / g_state.spine.viewer->getZoom() / vw : 1;
                                 g_state.spine.viewer->pan(mdx * s, -mdy * s);
                             }
                         }
@@ -680,7 +677,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                                 ag = SpineViewer::GizmoHandle::None;
                             if (ag != SpineViewer::GizmoHandle::None && !g_state.spine.selected_bone.empty() && nk_input_is_mouse_down(inp, NK_BUTTON_LEFT) && (mdx != 0 || mdy != 0))
                             {
-                                float s = g_state.spine.viewer->getZoom() > 0 ? (float)vw / g_state.spine.viewer->getZoom() / vw : 1;
+                                float s = g_state.spine.viewer->getZoom() > 0 ? static_cast<float>(vw) / g_state.spine.viewer->getZoom() / vw : 1;
                                 auto bl = g_state.spine.viewer->getBoneList();
                                 for (auto &b : bl)
                                 {
@@ -723,7 +720,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                     GLuint ft = g_state.spine.viewer->getFBOTexture();
                     if (ft)
                     {
-                        struct nk_image fimg = nk_image_id((int)ft);
+                        struct nk_image fimg = nk_image_id(static_cast<int>(ft));
                         nk_draw_image(nk_window_get_canvas(ctx), vb, &fimg, nk_rgb(255, 255, 255));
                     }
                 }
@@ -861,14 +858,13 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                         bool is_parent = has_children.count(bi.name) > 0;
                         bool is_collapsed = g_state.spine.collapsed_bones.count(bi.name) > 0;
 
-                        float indent_px = bi.depth * 10.0f;
-                        if (indent_px > 0)
+                        if (float indent_px = bi.depth * 10.0f; indent_px > 0)
                         {
                             int cols = 4;
                             nk_layout_row_begin(ctx, NK_STATIC, 16, cols);
                             nk_layout_row_push(ctx, indent_px);
                             struct nk_rect sp_bounds = nk_widget_bounds(ctx);
-                            struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+                            nk_command_buffer *canvas = nk_window_get_canvas(ctx);
                             float line_x = sp_bounds.x + indent_px - 6;
                             nk_stroke_line(canvas, line_x, sp_bounds.y, line_x, sp_bounds.y + sp_bounds.h, 1.0f, nk_rgb(60, 65, 75));
                             nk_stroke_line(canvas, line_x, sp_bounds.y + sp_bounds.h * 0.5f, sp_bounds.x + indent_px, sp_bounds.y + sp_bounds.h * 0.5f, 1.0f, nk_rgb(60, 65, 75));
@@ -915,7 +911,7 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                                     g_state.spine.collapsed_bones.insert(bi.name);
                             }
                             g_state.spine.selected_bone = bi.name;
-                            g_state.spine.viewer->selectedBoneIndex = (int)bi_idx;
+                            g_state.spine.viewer->selectedBoneIndex = static_cast<int>(bi_idx);
                             g_state.spine.bone_just_reset = false;
                         }
 
@@ -987,10 +983,10 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
 
                             float vals[7] = {bi.x, bi.y, bi.rotation, bi.scaleX, bi.scaleY, bi.shearX, bi.shearY};
                             float oldSclX = vals[3], oldSclY = vals[4];
-                            float steps[7] = {1.0f, 1.0f, 1.0f, 0.05f, 0.05f, 0.5f, 0.5f};
-                            float pxStep[7] = {0.5f, 0.5f, 0.5f, 0.01f, 0.01f, 0.1f, 0.1f};
                             for (int f = 0; f < 7; f++)
                             {
+                                float pxStep[7] = {0.5f, 0.5f, 0.5f, 0.01f, 0.01f, 0.1f, 0.1f};
+                                float steps[7] = {1.0f, 1.0f, 1.0f, 0.05f, 0.05f, 0.5f, 0.5f};
                                 float range = fmaxf(fmaxf(fabsf(vals[f]), fabsf(setup[f])) * 3.0f, 10.0f);
                                 nk_layout_row_dynamic(ctx, 18, 1);
                                 vals[f] = nk_propertyf(ctx, labels[f], -range, vals[f], range, steps[f], pxStep[f]);
@@ -1053,11 +1049,11 @@ void draw_spine_panel(nk_context *ctx, float content_height, int window_width)
                         nk_uint scx, scy;
                         nk_group_get_scroll(ctx, "BoneList", &scx, &scy);
                         struct nk_rect content = nk_window_get_content_region(ctx);
-                        float rel_y = scroll_target_y - content.y + (float)scy;
+                        float rel_y = scroll_target_y - content.y + static_cast<float>(scy);
                         float new_scroll = rel_y - content.h * 0.3f;
                         if (new_scroll < 0)
                             new_scroll = 0;
-                        nk_group_set_scroll(ctx, "BoneList", scx, (nk_uint)new_scroll);
+                        nk_group_set_scroll(ctx, "BoneList", scx, static_cast<nk_uint>(new_scroll));
                     }
                     g_state.spine.scroll_to_bone = false;
 

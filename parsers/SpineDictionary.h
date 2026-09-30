@@ -35,15 +35,16 @@ public:
     void Clear();
     void EnsureDetailsLoaded(IArchive& pack, const SpineEntry& entry) const;
 
-    const std::vector<SpineEntry>& GetEntries() const { return entries; }
-    const SpineCategory& GetRootCategory() const { return root_category; }
-    bool IsBuilt() const { return built; }
+    [[nodiscard]] const std::vector<SpineEntry>& GetEntries() const { return entries; }
+    [[nodiscard]] const SpineCategory& GetRootCategory() const { return root_category; }
+    [[nodiscard]] bool IsBuilt() const { return built; }
 
 private:
     void CollectFiles(const Core::FileNode& node);
-    void MatchEntries(IArchive& pack);
+    void MatchEntries();
     void BuildCategories();
-    std::vector<std::string> ParseAtlasTextureNames(const std::vector<uint8_t>& atlas_data) const;
+
+    static std::vector<std::string> ParseAtlasTextureNames(const std::vector<uint8_t>& atlas_data);
     const Core::FileNode* FindSiblingByName(const std::string& scsp_path, const std::string& filename);
 
     std::vector<SpineEntry> entries;

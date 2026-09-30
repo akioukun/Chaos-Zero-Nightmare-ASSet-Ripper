@@ -15,6 +15,5 @@ namespace SCSPParser {
         std::string hash;
     };
 
-    // Lightweight: decompresses and reads only the SCSP header fields.
     HeaderInfo ExtractHeader(const std::vector<uint8_t>& scsp_data);
 }
