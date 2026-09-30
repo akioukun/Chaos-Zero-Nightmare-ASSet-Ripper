@@ -36,13 +36,18 @@ bool is_atlas_file(const std::string &ext)
 
 bool is_json_file(const std::string &ext)
 {
-    return Core::ToLower(ext) == ".json";
+    const auto e = Core::ToLower(ext);
+    return e == ".json" || e == ".battletemplate" || e == ".config" ||
+           e == ".sfgm" || e == ".camera" || e == ".setting" ||
+           e == ".sract" || e == ".srmd" || e == ".srcs" ||
+           e == ".monstertest" || e == ".dat";
 }
 
 bool is_text_file(const std::string &ext)
 {
     const auto e = Core::ToLower(ext);
-    return e == ".txt" || is_atlas_file(e);
+    return e == ".txt" || e == ".cfx" || is_atlas_file(e) ||
+           e == ".fnt" || e == ".srt" || e == ".bat";
 }
 
 bool matches_search(const Core::FileNode &node, const std::string &query)
