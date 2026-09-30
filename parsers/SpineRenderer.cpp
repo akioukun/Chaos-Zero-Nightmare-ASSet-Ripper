@@ -306,7 +306,7 @@ bool SpineViewer::loadSkeleton(const SpineDictionary& dict, IArchive& pack, cons
     try {
         std::vector<uint8_t> scspData = pack.GetFileData(*entry.scsp_node);
         if (scspData.empty()) { errorMsg = "Failed to read SCSP file"; LogError("SpineViewer: " + errorMsg); return false; }
-        jsonStr = SCSPParser::ConvertSCSPToJson(scspData);
+        jsonStr = SCSPParser::ConvertToJson(scspData);
         if (jsonStr.empty()) { errorMsg = "Failed to convert SCSP to JSON"; LogError("SpineViewer: " + errorMsg); return false; }
         originalJson = jsonStr;
     } catch (const std::exception& e) {

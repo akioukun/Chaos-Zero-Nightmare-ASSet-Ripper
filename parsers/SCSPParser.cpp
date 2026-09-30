@@ -2158,7 +2158,7 @@ namespace SCSPParser
         return result.dump(4);
     }
 
-    std::string ConvertSCSPToJson(const std::vector<uint8_t> &scsp_data)
+    std::string ConvertToJson(const std::vector<uint8_t> &scsp_data)
     {
         auto decompressed = DecompressSCSP(scsp_data);
         return ParseSCSPToJson(decompressed);

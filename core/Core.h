@@ -1,10 +1,11 @@
 #pragma once
-#include <vector>
-#include <string>
-#include <cstdint>
+#include <algorithm>
 #include <array>
-#include <variant>
+#include <cstdint>
 #include <filesystem>
+#include <string>
+#include <variant>
+#include <vector>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -78,4 +79,27 @@ namespace Core {
             buffer[i] ^= key[(file_offset + i) % KEY_SIZE];
         }
     }
-}
+
+    /**
+     * Returns a copy of @p s with every ASCII character converted to lower-case.
+     * Centralises the repeated std::transform + ::tolower idiom that was
+     * previously duplicated across every is_*_format helper.
+     */
+    inline std::string ToLower(std::string s)
+    {
+        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        return s;
+    }
+
+    /**
+     * Returns @p name with its file extension replaced by @p new_ext.
+     * The extension is the last '.' and everything that follows it; when the
+     * name has no extension @p new_ext is simply appended.
+     * Example: ReplaceExtension("foo.sct", ".png") == "foo.png".
+     */
+    inline std::string ReplaceExtension(const std::string& name, const std::string& new_ext)
+    {
+        const auto dot = name.find_last_of('.');
+        return (dot != std::string::npos ? name.substr(0, dot) : name) + new_ext;
+    }
+}

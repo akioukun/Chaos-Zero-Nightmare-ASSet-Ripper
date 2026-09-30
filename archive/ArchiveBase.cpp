@@ -287,7 +287,7 @@ void ArchiveBase::ExtractNode(const Core::FileNode& node, const std::wstring& cu
                     try
                     {
                         LogInfo(std::string("Converting SCSP to JSON: ") + node.name);
-                        std::string json_str = SCSPParser::ConvertSCSPToJson(buffer);
+                        std::string json_str = SCSPParser::ConvertToJson(buffer);
                         buffer.assign(json_str.begin(), json_str.end());
                     }
                     catch (const std::exception& e)
