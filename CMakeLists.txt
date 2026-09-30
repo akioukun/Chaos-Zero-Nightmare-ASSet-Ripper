@@ -51,6 +51,7 @@ target_link_libraries(czn_core PUBLIC astc-encoder::astcenc-static Threads::Thre
 add_executable(
     ${PROJECT_NAME}
     main.cpp
+    gui/App.cpp
     gui/AppState.cpp
     gui/UIHelpers.cpp
     gui/Popups.cpp
