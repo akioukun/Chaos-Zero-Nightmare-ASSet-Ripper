@@ -70,16 +70,15 @@ enum class PreviewMode
     None,
     Image,
     DB,
-    JSON,
-    Text
+        Text
 };
 
 struct PreviewState
 {
     GLuint texture = 0;
     int width = 0, height = 0;
-    bool has_preview = false;
-    std::string error, text_preview, text_full, json_preview;
+        std::string error, text_preview, text_full;
+    bool is_json = false;
     PreviewMode mode = PreviewMode::None;
     const Core::FileNode* preview_node = nullptr;
 };

@@ -23,7 +23,7 @@ namespace {
     {
         try
         {
-            g_state.preview.json_preview = "";
+            g_state.preview.text_full = "";
             std::string json_content = content;
 
             if (json_content.empty())
@@ -43,13 +43,13 @@ namespace {
             try
             {
                 const nlohmann::json parsed = nlohmann::json::parse(json_content);
-                g_state.preview.json_preview = parsed.dump(2);
+                g_state.preview.text_full = parsed.dump(2);
             }
             catch (...)
             {
-                g_state.preview.json_preview = json_content;
+                g_state.preview.text_full = json_content;
             }
-            g_state.preview.mode = PreviewMode::JSON;
+            g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
         }
         catch (const std::exception &e)
         {
@@ -65,7 +65,7 @@ namespace {
             g_state.database.column_names.clear();
             g_state.database.rows.clear();
             g_state.database.json_data.clear();
-            g_state.preview.json_preview = "";
+            g_state.preview.text_full = "";
             g_state.preview.mode = PreviewMode::None;
 
             const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
@@ -78,8 +78,8 @@ namespace {
             std::string json_str = DBParser::ConvertToJson(file_data);
             if (json_str.empty() || json_str == "{}")
             {
-                g_state.preview.json_preview = json_str;
-                g_state.preview.mode = PreviewMode::JSON;
+                g_state.preview.text_full = json_str;
+                g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
                 return;
             }
 
@@ -89,8 +89,8 @@ namespace {
             }
             catch (const nlohmann::json::parse_error &e)
             {
-                g_state.preview.json_preview = json_str;
-                g_state.preview.mode = PreviewMode::JSON;
+                g_state.preview.text_full = json_str;
+                g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
                 return;
             }
 
@@ -98,8 +98,8 @@ namespace {
 
             if (!g_state.database.json_data.is_array() || g_state.database.json_data.empty())
             {
-                g_state.preview.json_preview = g_state.database.json_data.dump(2);
-                g_state.preview.mode = PreviewMode::JSON;
+                g_state.preview.text_full = g_state.database.json_data.dump(2);
+                g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
                 return;
             }
 
@@ -152,14 +152,14 @@ namespace {
             }
             else
             {
-                g_state.preview.json_preview = g_state.database.json_data.dump(2);
-                g_state.preview.mode = PreviewMode::JSON;
+                g_state.preview.text_full = g_state.database.json_data.dump(2);
+                g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
             }
         }
         catch (const std::exception &e)
         {
             g_state.preview.error = "DB parsing error: " + std::string(e.what());
-            g_state.preview.mode = PreviewMode::JSON;
+            g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
         }
     }
 
@@ -167,7 +167,7 @@ namespace {
     {
         try
         {
-            g_state.preview.json_preview = "";
+            g_state.preview.text_full = "";
             g_state.preview.mode = PreviewMode::None;
 
             const std::vector<uint8_t> file_data = g_state.browser.data_pack->GetFileData(node);
@@ -182,13 +182,13 @@ namespace {
                 try
                 {
                     const nlohmann::json parsed = nlohmann::json::parse(json_str);
-                    g_state.preview.json_preview = parsed.dump(2);
+                    g_state.preview.text_full = parsed.dump(2);
                 }
                 catch (...)
                 {
-                    g_state.preview.json_preview = json_str;
+                    g_state.preview.text_full = json_str;
                 }
-                g_state.preview.mode = PreviewMode::JSON;
+                g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = true;
             }
             else
             {
@@ -213,7 +213,7 @@ namespace {
             {
                 g_state.preview.text_preview = "Failed to read file";
                 g_state.preview.text_full = "";
-                g_state.preview.mode = PreviewMode::Text;
+                g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = false;
                 return;
             }
             g_state.preview.text_full = std::string(file_data.begin(), file_data.end());
@@ -222,13 +222,13 @@ namespace {
             {
                 g_state.preview.text_preview = g_state.preview.text_preview.substr(0, 20000) + "\n\n... (truncated)";
             }
-            g_state.preview.mode = PreviewMode::Text;
+            g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = false;
         }
         catch (const std::exception &e)
         {
             g_state.preview.text_preview = "Error loading text: " + std::string(e.what());
             g_state.preview.text_full = "";
-            g_state.preview.mode = PreviewMode::Text;
+            g_state.preview.mode = PreviewMode::Text; g_state.preview.is_json = false;
         }
     }
 
@@ -410,7 +410,7 @@ namespace {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_state.preview.width, g_state.preview.height, 0,
                          GL_RGBA, GL_UNSIGNED_BYTE, rgba_surface->pixels);
             SDL_FreeSurface(rgba_surface);
-            g_state.preview.has_preview = true;
+            
             g_state.preview.mode = PreviewMode::Image;
         }
     };
@@ -436,13 +436,13 @@ void clear_preview()
         glDeleteTextures(1, &g_state.preview.texture);
         g_state.preview.texture = 0;
     }
-    g_state.preview.has_preview = false;
+    
     g_state.preview.width = 0;
     g_state.preview.height = 0;
     g_state.preview.error = "";
     g_state.preview.text_preview = "";
     g_state.preview.text_full = "";
-    g_state.preview.json_preview = "";
+    g_state.preview.text_full = "";
     g_state.database.column_names.clear();
     g_state.database.rows.clear();
     g_state.preview.mode = PreviewMode::None;
@@ -477,13 +477,13 @@ void load_preview(const Core::FileNode &node)
     catch (const std::exception &e)
     {
         g_state.preview.error = "Error: " + std::string(e.what());
-        g_state.preview.has_preview = false;
+        
         g_state.preview.mode = PreviewMode::None;
     }
     catch (...)
     {
         g_state.preview.error = "Unknown error occurred";
-        g_state.preview.has_preview = false;
+        
         g_state.preview.mode = PreviewMode::None;
     }
 }
@@ -828,7 +828,7 @@ void draw_preview_panel(nk_context *ctx, float right_width, float content_height
                 nk_group_end(ctx);
             }
         }
-        else if (g_state.preview.mode == PreviewMode::JSON)
+        else if (g_state.preview.mode == PreviewMode::Text && g_state.preview.is_json)
         {
             nk_layout_row_dynamic(ctx, 25, 1);
             nk_label(ctx, "JSON Preview", NK_TEXT_CENTERED);
@@ -840,7 +840,7 @@ void draw_preview_panel(nk_context *ctx, float right_width, float content_height
                 nk_layout_row_push(ctx, 120);
                 if (nk_button_label(ctx, "Copy All"))
                 {
-                    SDL_SetClipboardText(g_state.preview.json_preview.c_str());
+                    SDL_SetClipboardText(g_state.preview.text_full.c_str());
                 }
                 nk_layout_row_push(ctx, 120);
                 if (nk_button_label(ctx, "Save As..."))
@@ -853,7 +853,7 @@ void draw_preview_panel(nk_context *ctx, float right_width, float content_height
                         {
                             if (std::ofstream out(save_path); out.is_open())
                             {
-                                out << g_state.preview.json_preview;
+                                out << g_state.preview.text_full;
                                 out.close();
                                 g_state.tasks.status = "Saved to: " + save_path;
                             }
@@ -872,7 +872,7 @@ void draw_preview_panel(nk_context *ctx, float right_width, float content_height
                 group_id += "_" + g_state.preview.preview_node->name;
             if (nk_group_begin(ctx, group_id.c_str(), NK_WINDOW_BORDER))
             {
-                std::stringstream ss(g_state.preview.json_preview);
+                std::stringstream ss(g_state.preview.text_full);
                 std::string line;
                 int line_count = 0;
                 while (std::getline(ss, line))
@@ -891,7 +891,7 @@ void draw_preview_panel(nk_context *ctx, float right_width, float content_height
                 nk_group_end(ctx);
             }
         }
-        else if (g_state.preview.mode == PreviewMode::Text)
+        else if (g_state.preview.mode == PreviewMode::Text && !g_state.preview.is_json)
         {
             nk_layout_row_dynamic(ctx, 25, 1);
             nk_label(ctx, "Text Viewer", NK_TEXT_CENTERED);
