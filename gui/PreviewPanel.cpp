@@ -10,7 +10,7 @@
 
 #include <GL/glew.h>
 #include <SDL_image.h>
-#include "nlohmann/json.hpp"
+#include "json.hpp"
 #include "nuklear.h"
 
 #include <algorithm>

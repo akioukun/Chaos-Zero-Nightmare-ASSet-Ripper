@@ -21,7 +21,7 @@
 #include "gui/UIHelpers.h"
 #include "gui/SpinePanel.h"
 
-#include "nlohmann/json.hpp"
+#include "json.hpp"
 #include "nuklear.h"
 
 namespace {

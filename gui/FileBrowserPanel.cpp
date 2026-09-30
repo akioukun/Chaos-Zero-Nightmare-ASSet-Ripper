@@ -5,7 +5,7 @@
 #include "core/FileTree.h"
 #include "core/DialogPaths.h"
 
-#include "nlohmann/json.hpp"
+#include "json.hpp"
 #include "nuklear.h"
 
 #include <algorithm>
