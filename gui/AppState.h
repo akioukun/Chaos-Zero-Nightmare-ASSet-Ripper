@@ -84,14 +84,6 @@ struct PreviewState
     const Core::FileNode* preview_node = nullptr;
 };
 
-struct TextViewerState
-{
-    bool show_window = false;
-    bool wrap_lines = true;
-    char filter[256] = {};
-    std::vector<char> text_buffer;
-};
-
 struct DatabaseViewerState
 {
     json json_data;
@@ -209,7 +201,6 @@ struct AppState
     FileBrowserState browser;
     TaskState tasks;
     PreviewState preview;
-    TextViewerState text_viewer;
     DatabaseViewerState database;
     ImageWindowState image;
     ContextMenuState context_menu;

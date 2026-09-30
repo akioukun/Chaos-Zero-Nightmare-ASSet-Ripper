@@ -55,7 +55,6 @@ add_executable(
     gui/AppState.cpp
     gui/UIHelpers.cpp
     gui/Popups.cpp
-    gui/TextViewerWindow.cpp
     gui/PreviewPanel.cpp
     gui/FileBrowserPanel.cpp
     gui/SpinePanel.cpp

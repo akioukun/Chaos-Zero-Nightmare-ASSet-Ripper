@@ -218,8 +218,6 @@ namespace {
             }
             g_state.preview.text_full = std::string(file_data.begin(), file_data.end());
             g_state.preview.text_preview = g_state.preview.text_full;
-            g_state.text_viewer.text_buffer.assign(g_state.preview.text_full.begin(), g_state.preview.text_full.end());
-            g_state.text_viewer.text_buffer.push_back('\0');
             if (g_state.preview.text_preview.length() > 20000)
             {
                 g_state.preview.text_preview = g_state.preview.text_preview.substr(0, 20000) + "\n\n... (truncated)";

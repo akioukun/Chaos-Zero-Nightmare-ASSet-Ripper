@@ -16,7 +16,6 @@
 #include "core/RipperOptions.h"
 #include "gui/AppState.h"
 #include "gui/Popups.h"
-#include "gui/TextViewerWindow.h"
 #include "gui/PreviewPanel.h"
 #include "gui/FileBrowserPanel.h"
 #include "gui/SpinePanel.h"
@@ -309,7 +308,6 @@ void App::Render() {
     draw_options_popup(m_ctx, m_window_width, m_window_height);
     draw_credits_popup(m_ctx, m_window_width, m_window_height);
     draw_feedback_popups(m_ctx, m_window_width, m_window_height);
-    draw_text_viewer_window(m_ctx, m_window_width, m_window_height);
 
     if (nk_begin(m_ctx, "Main", nk_rect(0, 0, static_cast<float>(m_window_width), static_cast<float>(m_window_height)), NK_WINDOW_NO_SCROLLBAR))
     {
