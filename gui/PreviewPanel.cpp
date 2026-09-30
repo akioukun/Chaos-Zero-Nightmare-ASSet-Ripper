@@ -1,4 +1,5 @@
 #include "gui/PreviewPanel.h"
+#include "gui/IPreviewLoader.h"
 #include "gui/UIHelpers.h"
 #include "core/Core.h"
 #include "core/FileTree.h"
@@ -345,6 +346,89 @@ namespace {
             g_state.tasks.status = "Export error: " + std::string(e.what());
         }
     }
+    class DBPreviewLoader : public IPreviewLoader {
+    public:
+        [[nodiscard]] bool CanLoad(const std::string& format) const override { return is_db_file(format); }
+        void Load(const Core::FileNode& node) override { load_db_preview(node); }
+    };
+
+    class SCSPPreviewLoader : public IPreviewLoader {
+    public:
+        [[nodiscard]] bool CanLoad(const std::string& format) const override { return is_scsp_file(format); }
+        void Load(const Core::FileNode& node) override { load_scsp_preview(node); }
+    };
+
+    class JSONPreviewLoader : public IPreviewLoader {
+    public:
+        [[nodiscard]] bool CanLoad(const std::string& format) const override { return is_json_file(format); }
+        void Load(const Core::FileNode& node) override { load_json_preview(node); }
+    };
+
+    class TextPreviewLoader : public IPreviewLoader {
+    public:
+        [[nodiscard]] bool CanLoad(const std::string& format) const override { return is_text_file(format); }
+        void Load(const Core::FileNode& node) override { load_text_preview(node); }
+    };
+
+    class AnimatedWebPPreviewLoader : public IPreviewLoader {
+    public:
+        [[nodiscard]] bool CanLoad(const std::string& format) const override { return is_animated_webp(format); }
+        void Load(const Core::FileNode& node) override {
+            g_state.preview.error = "Animated WebP preview not supported. Use 'Export' to save the file.";
+            g_state.preview.mode = PreviewMode::None;
+        }
+    };
+
+    class ImagePreviewLoader : public IPreviewLoader {
+    public:
+        [[nodiscard]] bool CanLoad(const std::string& format) const override { return is_previewable_format(format); }
+        void Load(const Core::FileNode& node) override {
+            std::string err;
+            SDL_Surface *surface = load_surface_from_node(node, err);
+            if (!surface)
+            {
+                g_state.preview.error = err;
+                g_state.preview.mode = PreviewMode::None;
+                return;
+            }
+
+            SDL_Surface *rgba_surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ABGR8888, 0);
+            SDL_FreeSurface(surface);
+
+            if (!rgba_surface)
+            {
+                g_state.preview.error = "Failed to convert image format";
+                g_state.preview.mode = PreviewMode::None;
+                return;
+            }
+
+            g_state.preview.width = rgba_surface->w;
+            g_state.preview.height = rgba_surface->h;
+
+            glGenTextures(1, &g_state.preview.texture);
+            glBindTexture(GL_TEXTURE_2D, g_state.preview.texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_state.preview.width, g_state.preview.height, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, rgba_surface->pixels);
+            SDL_FreeSurface(rgba_surface);
+            g_state.preview.has_preview = true;
+            g_state.preview.mode = PreviewMode::Image;
+        }
+    };
+
+    const std::vector<std::unique_ptr<IPreviewLoader>>& get_preview_loaders() {
+        static std::vector<std::unique_ptr<IPreviewLoader>> loaders;
+        if (loaders.empty()) {
+            loaders.push_back(std::make_unique<DBPreviewLoader>());
+            loaders.push_back(std::make_unique<SCSPPreviewLoader>());
+            loaders.push_back(std::make_unique<JSONPreviewLoader>());
+            loaders.push_back(std::make_unique<TextPreviewLoader>());
+            loaders.push_back(std::make_unique<AnimatedWebPPreviewLoader>());
+            loaders.push_back(std::make_unique<ImagePreviewLoader>());
+        }
+        return loaders;
+    }
 }
 
 void clear_preview()
@@ -381,73 +465,16 @@ void load_preview(const Core::FileNode &node)
         }
         const auto &info = std::get<Core::FileInfo>(node.data);
 
-        if (is_db_file(info.format))
+        for (const auto& loader : get_preview_loaders())
         {
-            load_db_preview(node);
-            return;
+            if (loader->CanLoad(info.format))
+            {
+                loader->Load(node);
+                return;
+            }
         }
 
-        if (is_scsp_file(info.format))
-        {
-            load_scsp_preview(node);
-            return;
-        }
-
-        if (is_json_file(info.format))
-        {
-            load_json_preview(node);
-            return;
-        }
-
-        if (is_text_file(info.format))
-        {
-            load_text_preview(node);
-            return;
-        }
-
-        if (is_animated_webp(info.format))
-        {
-            g_state.preview.error = "Animated WebP preview not supported. Use 'Export' to save the file.";
-            return;
-        }
-
-        if (!is_previewable_format(info.format))
-        {
-            g_state.preview.error = "Preview not available for " + info.format + " files";
-            return;
-        }
-
-        std::string err;
-        SDL_Surface *surface = load_surface_from_node(node, err);
-        if (!surface)
-        {
-            g_state.preview.error = err;
-            g_state.preview.mode = PreviewMode::None;
-            return;
-        }
-
-        SDL_Surface *rgba_surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ABGR8888, 0);
-        SDL_FreeSurface(surface);
-
-        if (!rgba_surface)
-        {
-            g_state.preview.error = "Failed to convert image format";
-            g_state.preview.mode = PreviewMode::None;
-            return;
-        }
-
-        g_state.preview.width = rgba_surface->w;
-        g_state.preview.height = rgba_surface->h;
-
-        glGenTextures(1, &g_state.preview.texture);
-        glBindTexture(GL_TEXTURE_2D, g_state.preview.texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g_state.preview.width, g_state.preview.height, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, rgba_surface->pixels);
-        SDL_FreeSurface(rgba_surface);
-        g_state.preview.has_preview = true;
-        g_state.preview.mode = PreviewMode::Image;
+        g_state.preview.error = "Preview not available for " + info.format + " files";
     }
     catch (const std::exception &e)
     {
