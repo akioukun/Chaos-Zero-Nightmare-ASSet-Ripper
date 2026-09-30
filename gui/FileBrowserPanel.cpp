@@ -266,10 +266,10 @@ namespace {
         sort_tree(g_state.diff.root.get());
 
         g_state.diff.show_tree = true;
-        g_state.diff.expanded_folders.clear();
-        g_state.diff.expanded_folders.insert(g_state.diff.root.get());
-        g_state.diff.selected_node = nullptr;
-        g_state.diff.selected_nodes.clear();
+        g_state.diff.selection.expanded_folders.clear();
+        g_state.diff.selection.expanded_folders.insert(g_state.diff.root.get());
+        g_state.diff.selection.selected_node = nullptr;
+        g_state.diff.selection.selected_nodes.clear();
     }
 
     bool load_diff_tree_from_filemap()
@@ -339,13 +339,13 @@ namespace {
         const bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
         const uint32_t current_time = SDL_GetTicks();
 
-        if (const uint32_t time_diff = current_time - g_state.browser.last_click_time; time_diff < 250 && node == g_state.diff.last_clicked_node)
+        if (const uint32_t time_diff = current_time - g_state.browser.selection.last_click_time; time_diff < 250 && node == g_state.diff.selection.last_clicked_node)
         {
-            g_state.browser.last_click_time = current_time;
+            g_state.browser.selection.last_click_time = current_time;
             return;
         }
 
-        update_multi_selection(ctrl_pressed, g_state.diff.selected_nodes, g_state.diff.selected_node, node);
+        update_multi_selection(ctrl_pressed, g_state.diff.selection.selected_nodes, g_state.diff.selection.selected_node, node);
 
         if (!is_folder && g_state.browser.data_pack)
         {
@@ -364,8 +364,8 @@ namespace {
             clear_preview();
         }
 
-        g_state.browser.last_click_time = current_time;
-        g_state.diff.last_clicked_node = node;
+        g_state.browser.selection.last_click_time = current_time;
+        g_state.diff.selection.last_clicked_node = node;
     }
 
     int get_diff_file_count(const DiffNode &node)
@@ -427,10 +427,10 @@ namespace {
                 if (!has_matching_diff_child(node, g_state.browser.search_query))
                     return;
 
-                g_state.diff.visible_nodes.push_back(&node);
+                g_state.diff.selection.visible_nodes.push_back(&node);
 
-                const bool is_expanded = g_state.diff.expanded_folders.find(&node) != g_state.diff.expanded_folders.end();
-                const bool is_selected = (g_state.diff.selected_nodes.find(&node) != g_state.diff.selected_nodes.end()) || (g_state.diff.selected_node == &node);
+                const bool is_expanded = g_state.diff.selection.expanded_folders.find(&node) != g_state.diff.selection.expanded_folders.end();
+                const bool is_selected = (g_state.diff.selection.selected_nodes.find(&node) != g_state.diff.selection.selected_nodes.end()) || (g_state.diff.selection.selected_node == &node);
 
                 const int file_count = get_diff_file_count(node);
                 const std::string info = std::to_string(file_count) + " items | " + Core::FormatSize(get_diff_folder_size(node));
@@ -445,9 +445,9 @@ namespace {
                 if (toggle_expand)
                 {
                     if (is_expanded)
-                        g_state.diff.expanded_folders.erase(&node);
+                        g_state.diff.selection.expanded_folders.erase(&node);
                     else
-                        g_state.diff.expanded_folders.insert(&node);
+                        g_state.diff.selection.expanded_folders.insert(&node);
                 }
 
                 if (is_expanded)
@@ -461,9 +461,9 @@ namespace {
                 if (!matches_diff_search(node, g_state.browser.search_query))
                     return;
 
-                g_state.diff.visible_nodes.push_back(&node);
+                g_state.diff.selection.visible_nodes.push_back(&node);
 
-                const bool is_selected = (g_state.diff.selected_nodes.find(&node) != g_state.diff.selected_nodes.end()) || (g_state.diff.selected_node == &node);
+                const bool is_selected = (g_state.diff.selection.selected_nodes.find(&node) != g_state.diff.selection.selected_nodes.end()) || (g_state.diff.selection.selected_node == &node);
                 const std::string size_str = Core::FormatSize(node.size) + " | " + node.format;
                 const nk_color text_color = get_diff_status_color(node.status, is_selected, false);
 
@@ -486,13 +486,13 @@ namespace {
             if (!has_matching_child(node, g_state.browser.search_query))
                 return;
 
-            g_state.browser.visible_nodes.push_back(&node);
+            g_state.browser.selection.visible_nodes.push_back(&node);
 
             if (std::holds_alternative<Core::FolderInfo>(node.data))
             {
                 const auto &[folder] = std::get<Core::FolderInfo>(node.data);
-                const bool is_expanded = g_state.browser.expanded_folders.find(&node) != g_state.browser.expanded_folders.end();
-                const bool is_selected = (g_state.browser.selected_nodes.find(&node) != g_state.browser.selected_nodes.end()) || (g_state.browser.selected_node == &node);
+                const bool is_expanded = g_state.browser.selection.expanded_folders.find(&node) != g_state.browser.selection.expanded_folders.end();
+                const bool is_selected = (g_state.browser.selection.selected_nodes.find(&node) != g_state.browser.selection.selected_nodes.end()) || (g_state.browser.selection.selected_node == &node);
 
                 const bool highlight_match = !g_state.browser.search_query.empty() && matches_search(node, g_state.browser.search_query);
                 const nk_color text_color = is_selected ? nk_rgb(255, 255, 255) : (highlight_match ? nk_rgb(100, 255, 100) : nk_rgb(220, 220, 220));
@@ -511,9 +511,9 @@ namespace {
                 if (toggle_expand)
                 {
                     if (is_expanded)
-                        g_state.browser.expanded_folders.erase(&node);
+                        g_state.browser.selection.expanded_folders.erase(&node);
                     else
-                        g_state.browser.expanded_folders.insert(&node);
+                        g_state.browser.selection.expanded_folders.insert(&node);
                 }
 
                 if (is_expanded)
@@ -528,7 +528,7 @@ namespace {
                     return;
 
                 const auto &file_info = std::get<Core::FileInfo>(node.data);
-                const bool is_selected = (g_state.browser.selected_nodes.find(&node) != g_state.browser.selected_nodes.end()) || (g_state.browser.selected_node == &node);
+                const bool is_selected = (g_state.browser.selection.selected_nodes.find(&node) != g_state.browser.selection.selected_nodes.end()) || (g_state.browser.selection.selected_node == &node);
 
                 const nk_color text_color = is_selected ? nk_rgb(255, 255, 255) : nk_rgb(200, 200, 200);
                 const std::string size_str = Core::FormatSize(file_info.size) + " | " + file_info.format;
@@ -562,14 +562,14 @@ void handle_node_click(const Core::FileNode *node, const bool is_folder)
     const bool ctrl_pressed = (SDL_GetModState() & KMOD_CTRL) != 0;
     const uint32_t current_time = SDL_GetTicks();
 
-    if (const uint32_t time_diff = current_time - g_state.browser.last_click_time; time_diff < 250 && node == g_state.browser.last_clicked_node)
+    if (const uint32_t time_diff = current_time - g_state.browser.selection.last_click_time; time_diff < 250 && node == g_state.browser.selection.last_clicked_node)
     {
-        g_state.browser.last_click_time = current_time;
+        g_state.browser.selection.last_click_time = current_time;
         return;
     }
 
     g_state.browser.click_count = 0;
-    update_multi_selection(ctrl_pressed, g_state.browser.selected_nodes, g_state.browser.selected_node, node);
+    update_multi_selection(ctrl_pressed, g_state.browser.selection.selected_nodes, g_state.browser.selection.selected_node, node);
 
     if (!is_folder)
     {
@@ -580,8 +580,8 @@ void handle_node_click(const Core::FileNode *node, const bool is_folder)
         clear_preview();
     }
 
-    g_state.browser.last_click_time = current_time;
-    g_state.browser.last_clicked_node = node;
+    g_state.browser.selection.last_click_time = current_time;
+    g_state.browser.selection.last_clicked_node = node;
 }
 
 void export_to_json()
@@ -644,7 +644,7 @@ void draw_file_browser_panel(nk_context *ctx, const bool tree_scanned, bool &scr
 {
     if (nk_group_begin(ctx, "FileTree", NK_WINDOW_BORDER | NK_WINDOW_TITLE))
     {
-        g_state.browser.visible_nodes.clear();
+        g_state.browser.selection.visible_nodes.clear();
 
         if (g_state.browser.data_pack && tree_scanned)
         {
@@ -652,11 +652,11 @@ void draw_file_browser_panel(nk_context *ctx, const bool tree_scanned, bool &scr
             {
                 draw_diff_node(ctx, *g_state.diff.root);
 
-                if (scroll_to_selected && g_state.diff.selected_node)
+                if (scroll_to_selected && g_state.diff.selection.selected_node)
                 {
-                    if (const auto it = std::find(g_state.diff.visible_nodes.begin(), g_state.diff.visible_nodes.end(), g_state.diff.selected_node); it != g_state.diff.visible_nodes.end())
+                    if (const auto it = std::find(g_state.diff.selection.visible_nodes.begin(), g_state.diff.selection.visible_nodes.end(), g_state.diff.selection.selected_node); it != g_state.diff.selection.visible_nodes.end())
                     {
-                        const int index = static_cast<int>(std::distance(g_state.diff.visible_nodes.begin(), it));
+                        const int index = static_cast<int>(std::distance(g_state.diff.selection.visible_nodes.begin(), it));
                         nk_uint current_x, current_y;
                         nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
 
@@ -691,11 +691,11 @@ void draw_file_browser_panel(nk_context *ctx, const bool tree_scanned, bool &scr
             {
                 draw_file_node(ctx, g_state.browser.data_pack->GetFileTree());
 
-                if (scroll_to_selected && g_state.browser.selected_node)
+                if (scroll_to_selected && g_state.browser.selection.selected_node)
                 {
-                    if (const auto it = std::find(g_state.browser.visible_nodes.begin(), g_state.browser.visible_nodes.end(), g_state.browser.selected_node); it != g_state.browser.visible_nodes.end())
+                    if (const auto it = std::find(g_state.browser.selection.visible_nodes.begin(), g_state.browser.selection.visible_nodes.end(), g_state.browser.selection.selected_node); it != g_state.browser.selection.visible_nodes.end())
                     {
-                        const int index = static_cast<int>(std::distance(g_state.browser.visible_nodes.begin(), it));
+                        const int index = static_cast<int>(std::distance(g_state.browser.selection.visible_nodes.begin(), it));
                         nk_uint current_x, current_y;
                         nk_group_get_scroll(ctx, "FileTree", &current_x, &current_y);
 

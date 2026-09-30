@@ -49,7 +49,7 @@ target_link_libraries(czn_core PUBLIC astc-encoder::astcenc-static Threads::Thre
 
 # GUI
 add_executable(
-    ${PROJECT_NAME}
+    ${PROJECT_NAME} WIN32
     main.cpp
     gui/App.cpp
     gui/AppState.cpp

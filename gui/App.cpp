@@ -50,7 +50,7 @@ void App::InitSDL() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    m_win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.4.0",
+    m_win = SDL_CreateWindow("Chaos Zero Nightmare ASSet Ripper v1.5.0",
                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                        INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
                                        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -77,7 +77,7 @@ void App::InitFonts() {
     bool font_loaded = false;
 
     // Try to load Malgun Gothic (Korean)
-    const char *font_kr = "C:\\Windows\\Fonts\\malgun.ttf";
+    const char *font_kr = R"(C:\Windows\Fonts\malgun.ttf)";
     std::ifstream f_kr(font_kr);
     if (f_kr.good())
     {
@@ -92,7 +92,7 @@ void App::InitFonts() {
     }
 
     // Try to load Microsoft YaHei (Chinese)
-    const char *font_cn = "C:\\Windows\\Fonts\\msyh.ttc";
+    const char *font_cn = R"(C:\Windows\Fonts\msyh.ttc)";
     std::ifstream f_cn(font_cn);
     if (f_cn.good())
     {
@@ -113,7 +113,7 @@ void App::InitFonts() {
     // Fallback to Segoe UI if no CJK font found
     if (!font_loaded)
     {
-        const char *font_base = "C:\\Windows\\Fonts\\segoeui.ttf";
+        const char *font_base = R"(C:\Windows\Fonts\segoeui.ttf)";
         std::ifstream f_base(font_base);
         if (f_base.good())
         {
@@ -190,8 +190,7 @@ void App::ProcessEvents() {
                     {
                         g_state.spine.selected_index = new_idx;
                         // Load skeleton on arrow key selection
-                        const auto &entries = g_state.spine.dictionary.GetEntries();
-                        if (g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)entries.size())
+                        if (const auto &entries = g_state.spine.dictionary.GetEntries(); g_state.spine.selected_index >= 0 && g_state.spine.selected_index < (int)entries.size())
                         {
                             if (!g_state.spine.viewer)
                                 g_state.spine.viewer = std::make_unique<SpineViewer>();
@@ -219,49 +218,49 @@ void App::ProcessEvents() {
                     }
                 }
             }
-            else if (g_state.browser.selected_node)
+            else if (g_state.browser.selection.selected_node)
             {
-                if ((evt.key.keysym.sym == SDLK_UP || evt.key.keysym.sym == SDLK_DOWN) && !g_state.browser.visible_nodes.empty())
+                if ((evt.key.keysym.sym == SDLK_UP || evt.key.keysym.sym == SDLK_DOWN) && !g_state.browser.selection.visible_nodes.empty())
                 {
-                    auto it = std::find(g_state.browser.visible_nodes.begin(), g_state.browser.visible_nodes.end(), g_state.browser.selected_node);
-                    if (it != g_state.browser.visible_nodes.end())
+                    auto it = std::find(g_state.browser.selection.visible_nodes.begin(), g_state.browser.selection.visible_nodes.end(), g_state.browser.selection.selected_node);
+                    if (it != g_state.browser.selection.visible_nodes.end())
                     {
-                        if (evt.key.keysym.sym == SDLK_UP && it > g_state.browser.visible_nodes.begin())
+                        if (evt.key.keysym.sym == SDLK_UP && it > g_state.browser.selection.visible_nodes.begin())
                         {
-                            g_state.browser.selected_node = *(it - 1);
-                            handle_node_click(g_state.browser.selected_node, std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data));
+                            g_state.browser.selection.selected_node = *(it - 1);
+                            handle_node_click(g_state.browser.selection.selected_node, std::holds_alternative<Core::FolderInfo>(g_state.browser.selection.selected_node->data));
                             m_scroll_to_selected = true;
                         }
-                        else if (evt.key.keysym.sym == SDLK_DOWN && it < g_state.browser.visible_nodes.end() - 1)
+                        else if (evt.key.keysym.sym == SDLK_DOWN && it < g_state.browser.selection.visible_nodes.end() - 1)
                         {
-                            g_state.browser.selected_node = *(it + 1);
-                            handle_node_click(g_state.browser.selected_node, std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data));
+                            g_state.browser.selection.selected_node = *(it + 1);
+                            handle_node_click(g_state.browser.selection.selected_node, std::holds_alternative<Core::FolderInfo>(g_state.browser.selection.selected_node->data));
                             m_scroll_to_selected = true;
                         }
                     }
                 }
                 else if (evt.key.keysym.sym == SDLK_RETURN)
                 {
-                    if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data))
+                    if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selection.selected_node->data))
                     {
-                        if (g_state.browser.expanded_folders.find(g_state.browser.selected_node) != g_state.browser.expanded_folders.end())
-                            g_state.browser.expanded_folders.erase(g_state.browser.selected_node);
+                        if (g_state.browser.selection.expanded_folders.find(g_state.browser.selection.selected_node) != g_state.browser.selection.expanded_folders.end())
+                            g_state.browser.selection.expanded_folders.erase(g_state.browser.selection.selected_node);
                         else
-                            g_state.browser.expanded_folders.insert(g_state.browser.selected_node);
+                            g_state.browser.selection.expanded_folders.insert(g_state.browser.selection.selected_node);
                     }
                 }
                 else if (evt.key.keysym.sym == SDLK_RIGHT)
                 {
-                    if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data))
+                    if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selection.selected_node->data))
                     {
-                        g_state.browser.expanded_folders.insert(g_state.browser.selected_node);
+                        g_state.browser.selection.expanded_folders.insert(g_state.browser.selection.selected_node);
                     }
                 }
                 else if (evt.key.keysym.sym == SDLK_LEFT)
                 {
-                    if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selected_node->data))
+                    if (std::holds_alternative<Core::FolderInfo>(g_state.browser.selection.selected_node->data))
                     {
-                        g_state.browser.expanded_folders.erase(g_state.browser.selected_node);
+                        g_state.browser.selection.expanded_folders.erase(g_state.browser.selection.selected_node);
                     }
                 }
             }
@@ -317,7 +316,7 @@ void App::Render() {
         draw_toolbar(m_ctx);
 
         bool tree_scanned = (g_state.browser.data_pack != nullptr) && g_state.tasks.scan_complete.load();
-        bool selection_exists = g_state.diff.show_tree ? (g_state.diff.selected_node != nullptr) : (g_state.browser.selected_node != nullptr);
+        bool selection_exists = g_state.diff.show_tree ? (g_state.diff.selection.selected_node != nullptr) : (g_state.browser.selection.selected_node != nullptr);
 
         float content_height = static_cast<float>(m_window_height) - 130;
 
@@ -414,12 +413,12 @@ void App::Render() {
         else
         {
             nk_layout_row_dynamic(m_ctx, 22, 1);
-            if (selection_exists && g_state.browser.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selected_node->data))
+            if (selection_exists && g_state.browser.selection.selected_node && std::holds_alternative<Core::FileInfo>(g_state.browser.selection.selected_node->data))
             {
-                const auto &info = std::get<Core::FileInfo>(g_state.browser.selected_node->data);
+                const auto &info = std::get<Core::FileInfo>(g_state.browser.selection.selected_node->data);
                 char off_buf[32];
                 snprintf(off_buf, sizeof(off_buf), "0x%llX", static_cast<unsigned long long>(info.offset));
-                std::string details = "Selected: " + g_state.browser.selected_node->name +
+                std::string details = "Selected: " + g_state.browser.selection.selected_node->name +
                                      " | Size: " + std::to_string(info.size) + " B" +
                                      " | Offset: " + off_buf +
                                      " | Format: " + info.format;

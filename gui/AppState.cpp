@@ -9,9 +9,9 @@ void reset_app_state()
 {
     g_state.browser.data_pack.reset();
     g_state.tasks.scan_complete = false;
-    g_state.browser.selected_node = nullptr;
-    g_state.browser.selected_nodes.clear();
-    g_state.browser.expanded_folders.clear();
+    g_state.browser.selection.selected_node = nullptr;
+    g_state.browser.selection.selected_nodes.clear();
+    g_state.browser.selection.expanded_folders.clear();
     clear_preview();
     g_state.browser.search_query = "";
     memset(g_state.browser.search_buffer, 0, sizeof(g_state.browser.search_buffer));
@@ -35,8 +35,8 @@ void reset_app_state()
     g_state.common.dragging_splitter = false;
     g_state.diff.show_tree = false;
     g_state.diff.root.reset();
-    g_state.diff.visible_nodes.clear();
-    g_state.diff.expanded_folders.clear();
-    g_state.diff.selected_nodes.clear();
-    g_state.diff.selected_node = nullptr;
+    g_state.diff.selection.visible_nodes.clear();
+    g_state.diff.selection.expanded_folders.clear();
+    g_state.diff.selection.selected_nodes.clear();
+    g_state.diff.selection.selected_node = nullptr;
 }

@@ -19,8 +19,8 @@ void draw_toolbar(nk_context *ctx)
 {
     bool pack_loaded = (g_state.browser.data_pack != nullptr);
     bool tree_scanned = pack_loaded && g_state.tasks.scan_complete.load();
-    bool selection_exists = g_state.diff.show_tree ? (g_state.diff.selected_node != nullptr) : (g_state.browser.selected_node != nullptr);
-    bool has_file_selection = g_state.diff.show_tree ? !g_state.diff.selected_nodes.empty() : !g_state.browser.selected_nodes.empty();
+    bool selection_exists = g_state.diff.show_tree ? (g_state.diff.selection.selected_node != nullptr) : (g_state.browser.selection.selected_node != nullptr);
+    bool has_file_selection = g_state.diff.show_tree ? !g_state.diff.selection.selected_nodes.empty() : !g_state.browser.selection.selected_nodes.empty();
     bool has_extract_selection = has_file_selection || selection_exists;
 
     nk_layout_row_dynamic(ctx, 38, g_state.common.enable_open_folder ? 10 : 9);
@@ -116,10 +116,10 @@ void draw_toolbar(nk_context *ctx)
             g_state.tasks.status = "Scanning...";
             g_state.tasks.progress = 0.0f;
 
-            g_state.browser.expanded_folders.clear();
-            g_state.browser.selected_node = nullptr;
-            g_state.browser.selected_nodes.clear();
-            g_state.browser.last_clicked_node = nullptr;
+            g_state.browser.selection.expanded_folders.clear();
+            g_state.browser.selection.selected_node = nullptr;
+            g_state.browser.selection.selected_nodes.clear();
+            g_state.browser.selection.last_clicked_node = nullptr;
             clear_preview();
 
             g_state.tasks.future = std::async(std::launch::async, []{
@@ -237,8 +237,8 @@ void draw_toolbar(nk_context *ctx)
                 std::vector<const Core::FileNode *> nodes_to_extract;
                 if (g_state.diff.show_tree)
                 {
-                    nodes_to_extract.reserve(g_state.diff.selected_nodes.size() + 1);
-                    for (const auto *n : g_state.diff.selected_nodes)
+                    nodes_to_extract.reserve(g_state.diff.selection.selected_nodes.size() + 1);
+                    for (const auto *n : g_state.diff.selection.selected_nodes)
                     {
                         if (n)
                         {
@@ -246,23 +246,23 @@ void draw_toolbar(nk_context *ctx)
                                 nodes_to_extract.push_back(fn);
                         }
                     }
-                    if (nodes_to_extract.empty() && g_state.diff.selected_node)
+                    if (nodes_to_extract.empty() && g_state.diff.selection.selected_node)
                     {
-                        if (const Core::FileNode* fn = Core::FindNodeByPath(g_state.browser.data_pack->GetFileTree(), g_state.diff.selected_node->full_path))
+                        if (const Core::FileNode* fn = Core::FindNodeByPath(g_state.browser.data_pack->GetFileTree(), g_state.diff.selection.selected_node->full_path))
                             nodes_to_extract.push_back(fn);
                     }
                 }
                 else
                 {
-                    nodes_to_extract.reserve(g_state.browser.selected_nodes.size() + 1);
-                    for (const auto *n : g_state.browser.selected_nodes)
+                    nodes_to_extract.reserve(g_state.browser.selection.selected_nodes.size() + 1);
+                    for (const auto *n : g_state.browser.selection.selected_nodes)
                     {
                         if (n)
                             nodes_to_extract.push_back(n);
                     }
-                    if (nodes_to_extract.empty() && g_state.browser.selected_node)
+                    if (nodes_to_extract.empty() && g_state.browser.selection.selected_node)
                     {
-                        nodes_to_extract.push_back(g_state.browser.selected_node);
+                        nodes_to_extract.push_back(g_state.browser.selection.selected_node);
                     }
                 }
 

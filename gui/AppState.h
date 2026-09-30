@@ -34,17 +34,22 @@ using json = nlohmann::ordered_json;
 #define INITIAL_WINDOW_HEIGHT 900
 #define DOUBLE_CLICK_TIME_MS 300
 
+template <typename NodeT>
+struct SelectionState {
+    const NodeT* selected_node = nullptr;
+    const NodeT* last_clicked_node = nullptr;
+    std::unordered_set<const NodeT*> selected_nodes;
+    std::unordered_set<const NodeT*> expanded_folders;
+    std::vector<const NodeT*> visible_nodes;
+    Uint32 last_click_time = 0;
+};
+
 struct FileBrowserState
 {
     std::unique_ptr<IArchive> data_pack;
-    const Core::FileNode *selected_node = nullptr;
-    const Core::FileNode *last_clicked_node = nullptr;
-    std::unordered_set<const Core::FileNode *> selected_nodes;
-    std::unordered_set<const Core::FileNode *> expanded_folders;
-    std::vector<const Core::FileNode *> visible_nodes;
+    SelectionState<Core::FileNode> selection;
     char search_buffer[256] = {};
     std::string search_query;
-    Uint32 last_click_time = 0;
     int click_count = 0;
 };
 
@@ -196,10 +201,7 @@ struct DiffViewerState
 {
     bool show_tree = false;
     std::unique_ptr<DiffNode> root;
-    std::unordered_set<const DiffNode *> expanded_folders, selected_nodes;
-    const DiffNode *selected_node = nullptr;
-    const DiffNode *last_clicked_node = nullptr;
-    std::vector<const DiffNode *> visible_nodes;
+    SelectionState<DiffNode> selection;
 };
 
 struct AppState
