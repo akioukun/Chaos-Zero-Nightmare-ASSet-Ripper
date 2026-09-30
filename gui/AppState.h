@@ -129,13 +129,6 @@ struct CreditsState
     bool show_window = false;
 };
 
-struct SCTPreviewState
-{
-    bool show_window = false;
-    GLuint texture = 0;
-    int width = 0, height = 0;
-    std::string filename;
-};
 
 struct SpineViewerState
 {
@@ -206,7 +199,6 @@ struct AppState
     ContextMenuState context_menu;
     CommonState common;
     CreditsState credits;
-    SCTPreviewState sct;
     SpineViewerState spine;
     DiffViewerState diff;
 };

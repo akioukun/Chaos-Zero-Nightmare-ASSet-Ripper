@@ -441,8 +441,6 @@ void App::Render() {
 void App::Cleanup() {
     if (g_state.preview.texture)
         glDeleteTextures(1, &g_state.preview.texture);
-    if (g_state.sct.texture)
-        glDeleteTextures(1, &g_state.sct.texture);
         
     if (m_ctx) {
         nk_sdl_shutdown();
