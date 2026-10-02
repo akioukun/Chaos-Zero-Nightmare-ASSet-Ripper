@@ -491,6 +491,9 @@ int main(int argc, char** argv)
 #else
     g_stdout_is_tty = isatty(1) != 0;
 #endif
+    // A piped stdout is fully buffered, so a caller reading it would see nothing until exit. Flush after every write instead.
+    if (!g_stdout_is_tty)
+        std::cout << std::unitbuf;
 
     CliOptions options;
     const int parse_result = parse_args(collect_args_utf8(argc, argv), options);
